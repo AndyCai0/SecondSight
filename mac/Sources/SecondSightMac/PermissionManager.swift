@@ -106,7 +106,7 @@ private final class PermissionPromptGuideController {
 
         let target = CGPoint(
             x: promptFrame.minX + promptFrame.width * 0.71,
-            y: promptFrame.minY + promptFrame.height * 0.16
+            y: promptFrame.minY + promptFrame.height * 0.04
         )
         let size = CGSize(width: 280, height: 170)
         let frame = CGRect(

@@ -10,8 +10,18 @@ struct AppConfiguration: Sendable {
 
         var errorDescription: String? {
             switch self {
-            case .missing: "还没有配置 Supabase。请复制 Config.template.plist 为 Config.plist 并填写两个公开配置值。"
-            case .invalidURL: "SUPABASE_URL 不是有效网址。"
+            case .missing:
+                localized(
+                    "还没有配置 Supabase。请复制 Config.template.plist 为 Config.plist 并填写两个公开配置值。",
+                    "Supabase is not configured. Copy Config.template.plist to Config.plist and enter the two public configuration values.",
+                    for: .savedOrSystemDefault
+                )
+            case .invalidURL:
+                localized(
+                    "SUPABASE_URL 不是有效网址。",
+                    "SUPABASE_URL is not a valid URL.",
+                    for: .savedOrSystemDefault
+                )
             }
         }
     }

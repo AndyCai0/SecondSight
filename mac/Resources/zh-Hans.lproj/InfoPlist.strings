@@ -1,0 +1,6 @@
+"CFBundleDisplayName" = "第二双眼睛";
+"NSAccessibilityUsageDescription" = "用于定位密码框等敏感输入区域并在分享前遮蔽。";
+"NSCameraUsageDescription" = "仅在您确认后打开摄像头，让帮助您的人在求助期间看到您。";
+"NSMicrophoneUsageDescription" = "用于在求助通话和“AI 帮我”时听清您的语音。";
+"NSScreenCaptureUsageDescription" = "用于把已经在本机遮蔽敏感信息的屏幕画面分享给帮助您的人。";
+"NSSpeechRecognitionUsageDescription" = "用于在本机把中文语音转成文字，提供安全检查和操作指引。";

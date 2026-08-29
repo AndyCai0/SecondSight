@@ -1,0 +1,6 @@
+"CFBundleDisplayName" = "SecondSight";
+"NSAccessibilityUsageDescription" = "Used to locate sensitive input areas, such as password fields, and mask them before sharing.";
+"NSCameraUsageDescription" = "Turns on the camera only after you confirm, so your volunteer can see you during assistance.";
+"NSMicrophoneUsageDescription" = "Used for your assistance call and spoken AI guidance requests.";
+"NSScreenCaptureUsageDescription" = "Shares your screen with your volunteer only after sensitive information is masked on this Mac.";
+"NSSpeechRecognitionUsageDescription" = "Converts speech to text on this Mac for safety checks and step-by-step guidance.";

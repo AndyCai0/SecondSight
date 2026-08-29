@@ -29,6 +29,7 @@ final class OverlayModel: ObservableObject {
     @Published var frozenReason: String?
     @Published private(set) var volunteerCameraTrack: RemoteVideoTrack?
     @Published var safetyWarning: SafetyWarning?
+    @Published var language = AppLanguage.savedOrSystemDefault
     var onResume: (() -> Void)?
     var onSafetyPause: (() -> Void)?
     var onSafetyDismiss: (() -> Void)?
@@ -129,7 +130,7 @@ struct OverlayView: View {
                             SwiftUIVideoView(track, layoutMode: .fill)
                                 .frame(width: 320, height: 180)
                                 .clipped()
-                            Text("帮助您的人")
+                            Text(localized("帮助您的人", "Your Volunteer", for: model.language))
                                 .font(.system(size: 22, weight: .bold))
                                 .foregroundStyle(.white)
                                 .padding(.horizontal, 16)
@@ -153,12 +154,20 @@ struct OverlayView: View {
                 VStack(spacing: 22) {
                     Image(systemName: "exclamationmark.shield.fill")
                         .font(.system(size: 72))
-                    Text("安全警告")
+                    Text(localized("安全警告", "Safety Alert", for: model.language))
                         .font(.system(size: 42, weight: .heavy))
-                    Text("对方可能正在索要您的敏感信息。")
+                    Text(localized(
+                        "对方可能正在索要您的敏感信息。",
+                        "The other person may be asking for sensitive information.",
+                        for: model.language
+                    ))
                         .font(.system(size: 30, weight: .bold))
                         .multilineTextAlignment(.center)
-                    Text("不要告诉任何人验证码、密码、PIN 或银行卡信息。")
+                    Text(localized(
+                        "不要告诉任何人验证码、密码、PIN 或银行卡信息。",
+                        "Never share verification codes, passwords, PINs, or bank details.",
+                        for: model.language
+                    ))
                         .font(.system(size: 28, weight: .heavy))
                         .multilineTextAlignment(.center)
                     Text("“\(warning.transcript)”")
@@ -167,16 +176,35 @@ struct OverlayView: View {
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 22)
                     HStack(spacing: 18) {
-                        Button("暂停通话") { model.onSafetyPause?() }
+                        Button { model.onSafetyPause?() } label: {
+                            ActionButtonLabel(title: localized(
+                                "暂停通话",
+                                "Pause Call",
+                                for: model.language
+                            ))
+                        }
                             .buttonStyle(.borderedProminent)
                             .tint(.red)
-                        Button("关闭提醒") { model.onSafetyDismiss?() }
+                            .secondSightActionButton()
+                        Button { model.onSafetyDismiss?() } label: {
+                            ActionButtonLabel(title: localized(
+                                "关闭提醒",
+                                "Dismiss",
+                                for: model.language
+                            ))
+                        }
                             .buttonStyle(.bordered)
-                        Button("联系志愿者") { model.onContactVolunteer?() }
+                            .secondSightActionButton()
+                        Button { model.onContactVolunteer?() } label: {
+                            ActionButtonLabel(title: localized(
+                                "联系志愿者",
+                                "Contact Volunteer",
+                                for: model.language
+                            ))
+                        }
                             .buttonStyle(.borderedProminent)
+                            .secondSightActionButton()
                     }
-                    .controlSize(.large)
-                    .font(.system(size: 24, weight: .bold))
                 }
                 .foregroundStyle(.black)
                 .padding(36)
@@ -193,16 +221,29 @@ struct OverlayView: View {
                 VStack(spacing: 32) {
                     Image(systemName: "exclamationmark.shield.fill")
                         .font(.system(size: 88))
-                    Text("检测到可疑请求，通话已暂停")
+                    Text(localized(
+                        "检测到可疑请求，通话已暂停",
+                        "A Suspicious Request Was Detected. The Call Is Paused.",
+                        for: model.language
+                    ))
                         .font(.system(size: 42, weight: .heavy))
-                    Text("请勿告诉任何人您的密码或验证码")
+                    Text(localized(
+                        "请勿告诉任何人您的密码或验证码",
+                        "Never share your password or verification code",
+                        for: model.language
+                    ))
                         .font(.system(size: 32, weight: .bold))
                     Text(reason)
                         .font(.system(size: 24))
-                    Button("是误报，继续通话") { model.onResume?() }
+                    Button { model.onResume?() } label: {
+                        ActionButtonLabel(title: localized(
+                            "是误报，继续通话",
+                            "False Alarm — Resume Call",
+                            for: model.language
+                        ))
+                    }
                         .buttonStyle(.borderedProminent)
-                        .controlSize(.large)
-                        .font(.system(size: 26, weight: .bold))
+                        .secondSightActionButton()
                 }
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)

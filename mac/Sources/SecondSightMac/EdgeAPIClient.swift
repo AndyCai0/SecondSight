@@ -8,8 +8,18 @@ final class EdgeAPIClient: @unchecked Sendable {
 
         var errorDescription: String? {
             switch self {
-            case .invalidResponse: "服务器返回了无法识别的数据。"
-            case let .server(status, message): "服务器错误（\(status)）：\(message)"
+            case .invalidResponse:
+                localized(
+                    "服务器返回了无法识别的数据。",
+                    "The server returned an invalid response.",
+                    for: .savedOrSystemDefault
+                )
+            case let .server(status, message):
+                localized(
+                    "服务器错误（\(status)）：\(message)",
+                    "Server error (\(status)): \(message)",
+                    for: .savedOrSystemDefault
+                )
             }
         }
     }
@@ -99,7 +109,7 @@ final class EdgeAPIClient: @unchecked Sendable {
         guard (200 ..< 300).contains(http.statusCode) else {
             let message = (try? decoder.decode(APIErrorResponse.self, from: data).error)
                 ?? String(data: data, encoding: .utf8)
-                ?? "未知错误"
+                ?? localized("未知错误", "Unknown error", for: .savedOrSystemDefault)
             throw ClientError.server(status: http.statusCode, message: message)
         }
         do { return try decoder.decode(Response.self, from: data) }

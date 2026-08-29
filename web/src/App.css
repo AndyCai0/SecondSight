@@ -13,6 +13,12 @@
   backdrop-filter: blur(18px);
 }
 
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
 .brand {
   display: inline-flex;
   align-items: center;
@@ -272,9 +278,7 @@
 
 .broadcast-card button {
   flex: 0 0 auto;
-  padding: 9px 12px;
   border: 0;
-  border-radius: 9px;
   color: #32110c;
   background: var(--coral);
   font-size: 11px;
@@ -344,10 +348,8 @@
 }
 
 .primary-button {
-  height: 56px;
   margin-top: 25px;
   border: 0;
-  border-radius: 12px;
   color: #071b17;
   background: var(--mint);
   font-weight: 800;
@@ -445,7 +447,7 @@
 }
 
 .leave-button {
-  padding: 10px 15px;
+  padding: 0 18px;
 }
 
 .volunteer-camera-card {
@@ -706,7 +708,6 @@
 
 .annotation-toolbar button {
   min-width: 124px;
-  padding: 11px 15px;
   font-size: 13px;
   transition: background 140ms ease, border 140ms ease, color 140ms ease;
 }
@@ -778,7 +779,6 @@
 }
 
 .safety-risk-card button {
-  padding: 0.7rem 1rem;
   color: inherit;
   background: transparent;
   border: 2px solid currentColor;
@@ -880,6 +880,15 @@
 
   .safety-promise {
     display: none;
+  }
+
+  .header-actions {
+    margin-left: auto;
+  }
+
+  .language-switch button {
+    min-width: 72px;
+    padding: 0 10px;
   }
 
   .join-layout {

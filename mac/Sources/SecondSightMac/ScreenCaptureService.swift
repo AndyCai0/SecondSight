@@ -119,6 +119,12 @@ final class ScreenCaptureService: NSObject, SCStreamOutput, SCStreamDelegate, @u
 
     enum CaptureError: LocalizedError {
         case noDisplay
-        var errorDescription: String? { "找不到可共享的主显示器。" }
+        var errorDescription: String? {
+            localized(
+                "找不到可共享的主显示器。",
+                "Could not find a primary display to share.",
+                for: .savedOrSystemDefault
+            )
+        }
     }
 }

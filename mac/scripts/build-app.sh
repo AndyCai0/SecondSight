@@ -44,6 +44,9 @@ if [[ -f "Config.plist" ]]; then
 else
   cp "Config.template.plist" "$resources_path/Config.plist"
 fi
+for localization_dir in Resources/*.lproj(N); do
+  cp -R "$localization_dir" "$resources_path/"
+done
 
 cp -R ".build/artifacts/webrtc-xcframework/LiveKitWebRTC/LiveKitWebRTC.xcframework/macos-arm64_x86_64/LiveKitWebRTC.framework" "$frameworks_path/"
 cp -R ".build/artifacts/livekit-uniffi-xcframework/RustLiveKitUniFFI/RustLiveKitUniFFI.xcframework/macos-arm64_x86_64/RustLiveKitUniFFI.framework" "$frameworks_path/"

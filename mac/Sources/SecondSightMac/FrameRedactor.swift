@@ -80,7 +80,11 @@ final class FrameRedactor: @unchecked Sendable {
             kCTFontAttributeName: CTFontCreateWithName("PingFang SC" as CFString, fontSize, nil),
             kCTForegroundColorAttributeName: NSColor.white.cgColor,
         ]
-        let text = "正在输入敏感信息，画面已暂停"
+        let text = localized(
+            "正在输入敏感信息，画面已暂停",
+            "Sensitive information is being entered. Screen sharing is paused.",
+            for: .savedOrSystemDefault
+        )
         let line = CTLineCreateWithAttributedString(CFAttributedStringCreate(nil, text as CFString, attributes as CFDictionary))
         let bounds = CTLineGetBoundsWithOptions(line, [])
         cg.textPosition = CGPoint(x: max(20, (CGFloat(width) - bounds.width) / 2), y: CGFloat(height) / 2)

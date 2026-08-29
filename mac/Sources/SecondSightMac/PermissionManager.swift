@@ -14,6 +14,7 @@ private enum PermissionGuidePresentation: Equatable {
 
 private struct PermissionPromptGuideView: View {
     let presentation: PermissionGuidePresentation
+    private var language: AppLanguage { .savedOrSystemDefault }
 
     @ViewBuilder
     var body: some View {
@@ -24,9 +25,9 @@ private struct PermissionPromptGuideView: View {
                     .font(.system(size: 46, weight: .heavy))
                     .foregroundStyle(.orange)
                 VStack(spacing: 2) {
-                    Text("点击这里")
+                    Text(localized("点击这里", "Select here", for: language))
                         .font(.system(size: 30, weight: .heavy))
-                    Text("打开系统设置")
+                    Text(localized("打开系统设置", "Open System Settings", for: language))
                         .font(.system(size: 24, weight: .bold))
                 }
                 .foregroundStyle(.black)
@@ -40,9 +41,9 @@ private struct PermissionPromptGuideView: View {
             VStack(spacing: -8) {
                 HStack {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("找到 SecondSightMac")
+                        Text(localized("找到 SecondSightMac", "Find SecondSightMac", for: language))
                             .font(.system(size: 30, weight: .heavy))
-                        Text("打开下面的开关")
+                        Text(localized("打开下面的开关", "Turn on the switch below", for: language))
                             .font(.system(size: 26, weight: .bold))
                     }
                     Spacer(minLength: 0)
@@ -554,11 +555,11 @@ final class PermissionManager: ObservableObject {
         case denied
         case notDetermined
 
-        var label: String {
+        func label(for language: AppLanguage) -> String {
             switch self {
-            case .authorized: "已允许"
-            case .denied: "还没允许"
-            case .notDetermined: "等待设置"
+            case .authorized: localized("已允许", "Allowed", for: language)
+            case .denied: localized("还没允许", "Not allowed", for: language)
+            case .notDetermined: localized("等待设置", "Waiting for setup", for: language)
             }
         }
     }
@@ -569,6 +570,15 @@ final class PermissionManager: ObservableObject {
         case microphone = "麦克风"
         case speech = "语音识别"
         var id: String { rawValue }
+
+        func displayName(for language: AppLanguage) -> String {
+            switch self {
+            case .screen: localized("屏幕录制", "Screen Recording", for: language)
+            case .accessibility: localized("辅助功能", "Accessibility", for: language)
+            case .microphone: localized("麦克风", "Microphone", for: language)
+            case .speech: localized("语音识别", "Speech Recognition", for: language)
+            }
+        }
 
         var systemSettingsURL: URL? {
             let pane: String

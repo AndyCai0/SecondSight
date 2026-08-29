@@ -312,6 +312,12 @@ final class LiveKitTransport: NSObject, RoomDelegate, @unchecked Sendable {
 
     enum TransportError: LocalizedError {
         case connectionFailed
-        var errorDescription: String? { "无法连接到通话房间。" }
+        var errorDescription: String? {
+            localized(
+                "无法连接到通话房间。",
+                "Could not connect to the call room.",
+                for: .savedOrSystemDefault
+            )
+        }
     }
 }

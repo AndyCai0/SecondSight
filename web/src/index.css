@@ -14,6 +14,8 @@
   --mint-dark: #071b17;
   --coral: #ff795f;
   --danger: #ff5d61;
+  --button-height: 46px;
+  --button-radius: 10px;
 }
 
 * {
@@ -38,12 +40,44 @@ input {
 }
 
 button {
+  height: var(--button-height);
+  min-height: var(--button-height);
+  padding: 0 18px;
+  border-radius: var(--button-radius);
   cursor: pointer;
 }
 
 button:disabled {
   cursor: not-allowed;
   opacity: 0.55;
+}
+
+.language-switch {
+  display: inline-grid;
+  grid-template-columns: 1fr 1fr;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--button-radius);
+  background: rgba(5, 18, 16, 0.58);
+}
+
+.language-switch button {
+  min-width: 82px;
+  border: 0;
+  border-radius: 0;
+  color: var(--muted);
+  background: transparent;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.language-switch button + button {
+  border-left: 1px solid var(--line);
+}
+
+.language-switch button.selected {
+  color: var(--mint-dark);
+  background: var(--mint);
 }
 
 a {

@@ -3,6 +3,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { messages } from './i18n'
 
 const htmlEntries = [
   'index.html',
@@ -10,26 +11,25 @@ const htmlEntries = [
   'fake-elder.html',
 ]
 
-const userFacingSources = [
-  ...htmlEntries,
-  'src/App.tsx',
-  'src/AnnotationSurface.tsx',
-  'src/AlertsPage.tsx',
-  'src/fake-elder.ts',
-  'src/api.ts',
-]
-
-describe('English-only Web UI', () => {
-  it('declares English on every built HTML entry', () => {
+describe('bilingual Web UI', () => {
+  it('declares an English fallback on every built HTML entry', () => {
     for (const entry of htmlEntries) {
       expect(read(entry), entry).toMatch(/<html lang="en">/)
     }
   })
 
-  it('contains no hard-coded Han characters in user-facing Web sources', () => {
-    for (const source of userFacingSources) {
-      expect(read(source), source).not.toMatch(/\p{Script=Han}/u)
+  it('provides a non-empty English and Chinese version for every message', () => {
+    for (const [key, value] of Object.entries(messages)) {
+      expect(value.en.trim(), `${key}.en`).not.toBe('')
+      expect(value.zh.trim(), `${key}.zh`).not.toBe('')
     }
+  })
+
+  it('uses one shared button height across the Web UI', () => {
+    const globalStyles = read('src/index.css')
+    expect(globalStyles).toContain('--button-height: 46px;')
+    expect(globalStyles).toMatch(/button\s*\{[^}]*height:\s*var\(--button-height\);/s)
+    expect(read('src/App.css')).not.toMatch(/(?:^|\n)[^@\n][^{]*button[^}]*\bheight:\s*\d+px;/s)
   })
 
   it('keeps the document usable on a 320px-wide viewport', () => {

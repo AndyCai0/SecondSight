@@ -9,8 +9,10 @@ final class PushToTalkSpeechService {
         case onDeviceUnavailable
         var errorDescription: String? {
             switch self {
-            case .unavailable: "语音识别现在不可用。"
-            case .onDeviceUnavailable: "这台 Mac 暂不支持离线中文语音识别。"
+            case .unavailable:
+                localized("语音识别现在不可用。", "Speech recognition is currently unavailable.", for: .savedOrSystemDefault)
+            case .onDeviceUnavailable:
+                localized("这台 Mac 暂不支持离线中文语音识别。", "This Mac does not currently support offline Chinese speech recognition.", for: .savedOrSystemDefault)
             }
         }
     }

@@ -370,12 +370,18 @@ final class AssemblyAIStreamingService: NSObject, AudioRenderer, @unchecked Send
 
         var errorDescription: String? {
             switch self {
-            case .invalidCredential: "无法开始安全监听：临时凭证无效。"
-            case .invalidServerMessage: "安全监听收到无法识别的转录数据。"
-            case .serverEndedSession: "安全监听连接已由转录服务关闭。"
-            case .server: "安全监听服务暂时无法使用，请稍后重试。"
-            case .unsupportedAudioFormat: "安全监听无法处理当前通话音频格式。"
-            case .audioConversionFailed: "安全监听音频转换失败。"
+            case .invalidCredential:
+                localized("无法开始安全监听：临时凭证无效。", "Could not start safety monitoring: the temporary credential is invalid.", for: .savedOrSystemDefault)
+            case .invalidServerMessage:
+                localized("安全监听收到无法识别的转录数据。", "Safety monitoring received invalid transcription data.", for: .savedOrSystemDefault)
+            case .serverEndedSession:
+                localized("安全监听连接已由转录服务关闭。", "The transcription service closed the safety monitoring connection.", for: .savedOrSystemDefault)
+            case .server:
+                localized("安全监听服务暂时无法使用，请稍后重试。", "Safety monitoring is temporarily unavailable. Try again later.", for: .savedOrSystemDefault)
+            case .unsupportedAudioFormat:
+                localized("安全监听无法处理当前通话音频格式。", "Safety monitoring cannot process the current call audio format.", for: .savedOrSystemDefault)
+            case .audioConversionFailed:
+                localized("安全监听音频转换失败。", "Safety monitoring could not convert the call audio.", for: .savedOrSystemDefault)
             }
         }
     }

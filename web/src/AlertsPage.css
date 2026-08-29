@@ -27,6 +27,36 @@
   text-transform: uppercase;
 }
 
+.alerts-header__actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.alerts-header__actions .language-switch span {
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+@media (max-width: 700px) {
+  .alerts-header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 12px;
+    padding-top: 14px;
+    padding-bottom: 14px;
+  }
+
+  .alerts-header__actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .alerts-header__actions > span {
+    display: none;
+  }
+}
+
 .alerts-main {
   width: min(920px, 88vw);
   margin: 0 auto;

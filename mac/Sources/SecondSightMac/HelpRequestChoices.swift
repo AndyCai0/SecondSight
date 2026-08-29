@@ -9,15 +9,20 @@ struct HelpRequestChoices: View {
             Button {
                 model.startHelp(using: .broadcast)
             } label: {
-                Label("呼叫在线助手", systemImage: "antenna.radiowaves.left.and.right")
-                    .font(.system(size: 30, weight: .heavy))
-                    .frame(maxWidth: .infinity, minHeight: 64)
+                ActionButtonLabel(
+                    title: localized("呼叫在线助手", "Call an Online Volunteer", for: model.language),
+                    systemImage: "antenna.radiowaves.left.and.right"
+                )
             }
             .buttonStyle(.borderedProminent)
-            .controlSize(.large)
+            .secondSightActionButton()
             .disabled(isDisabled)
 
-            Text("向所有在线助手发出求助，由愿意帮助的人选择响应。")
+            Text(localized(
+                "向所有在线助手发出求助，由愿意帮助的人选择响应。",
+                "Send a request to every online volunteer. The first available person can respond.",
+                for: model.language
+            ))
                 .font(.system(size: 24, weight: .semibold))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -25,12 +30,13 @@ struct HelpRequestChoices: View {
             Button {
                 model.startHelp(using: .shareCode)
             } label: {
-                Label("使用 6 位分享码", systemImage: "number.square.fill")
-                    .font(.system(size: 24, weight: .bold))
-                    .frame(maxWidth: .infinity, minHeight: 54)
+                ActionButtonLabel(
+                    title: localized("使用 6 位分享码", "Use a 6-Digit Room Code", for: model.language),
+                    systemImage: "number.square.fill"
+                )
             }
             .buttonStyle(.bordered)
-            .controlSize(.large)
+            .secondSightActionButton()
             .disabled(isDisabled)
         }
     }

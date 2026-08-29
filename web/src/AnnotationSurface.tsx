@@ -14,6 +14,7 @@ import type {
 import { opacityForExpiry } from './annotationTiming'
 import { pointToVideoCoordinates, videoFrameBox, type Point } from './geometry'
 import { shouldSendPointer } from './pointerThrottle'
+import { translate, type UILanguage } from './i18n'
 
 type Tool = 'circle' | 'arrow' | 'pointer'
 type TimedAnnotation = (CircleAnnotation | ArrowAnnotation) & { expiresAt: number }
@@ -22,6 +23,7 @@ interface AnnotationSurfaceProps {
   videoRef: RefObject<HTMLVideoElement | null>
   hasMedia: boolean
   disabled?: boolean
+  language?: UILanguage
   send(message: VolunteerOutboundMessage): Promise<void>
   log(message: VolunteerOutboundMessage): void
   onSendError(): void
@@ -31,6 +33,7 @@ export function AnnotationSurface({
   videoRef,
   hasMedia,
   disabled = false,
+  language = 'en',
   send,
   log,
   onSendError,
@@ -224,12 +227,12 @@ export function AnnotationSurface({
   }
 
   return (
-    <section className="assist-surface" aria-label="Remote assistance screen">
+    <section className="assist-surface" aria-label={translate(language, 'remoteScreenAria')}>
       <div className="video-stage" ref={containerRef}>
-        <video ref={videoRef} autoPlay playsInline aria-label="Elder's shared screen" />
+        <video ref={videoRef} autoPlay playsInline aria-label={translate(language, 'elderScreenAria')} />
         <canvas
           ref={canvasRef}
-          aria-label="Annotation canvas"
+          aria-label={translate(language, 'annotationCanvas')}
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
@@ -239,20 +242,20 @@ export function AnnotationSurface({
             setDragEnd(null)
           }}
         />
-        {!hasMedia && <div className="waiting-media">Waiting for the elder to share their screen…</div>}
+        {!hasMedia && <div className="waiting-media">{translate(language, 'waitingElderScreen')}</div>}
       </div>
-      <div className="annotation-toolbar" role="toolbar" aria-label="Annotation tools">
+      <div className="annotation-toolbar" role="toolbar" aria-label={translate(language, 'annotationTools')}>
         <button className={tool === 'circle' ? 'selected' : ''} onClick={() => setTool('circle')} disabled={disabled}>
-          <span aria-hidden="true">◯</span> Circle a location
+          <span aria-hidden="true">◯</span> {translate(language, 'circleLocation')}
         </button>
         <button className={tool === 'arrow' ? 'selected' : ''} onClick={() => setTool('arrow')} disabled={disabled}>
-          <span aria-hidden="true">↗</span> Draw an arrow
+          <span aria-hidden="true">↗</span> {translate(language, 'drawArrow')}
         </button>
         <button className={tool === 'pointer' ? 'selected' : ''} onClick={() => setTool('pointer')} disabled={disabled}>
-          <span aria-hidden="true">●</span> Laser pointer
+          <span aria-hidden="true">●</span> {translate(language, 'laserPointer')}
         </button>
         <button onClick={clearAnnotations} disabled={disabled}>
-          Clear annotations
+          {translate(language, 'clearAnnotations')}
         </button>
       </div>
     </section>

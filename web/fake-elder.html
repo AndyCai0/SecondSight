@@ -17,8 +17,11 @@
       .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
       label { display: grid; gap: 7px; color: #bcd0ca; font-size: 13px; }
       input { width: 100%; padding: 12px; border: 1px solid #36534d; border-radius: 9px; color: #eaf3f1; background: #081513; }
-      button { margin-top: 18px; padding: 13px 18px; border: 0; border-radius: 9px; color: #071b17; background: #6fe2c0; font-weight: 750; cursor: pointer; }
+      button { height: 46px; min-height: 46px; padding: 0 18px; border: 0; border-radius: 10px; color: #071b17; background: #6fe2c0; font-weight: 750; cursor: pointer; }
       button:disabled { opacity: .5; cursor: wait; }
+      .language-switch { display: flex; justify-content: flex-end; gap: 8px; }
+      .language-switch button { color: #9aafaa; background: #102320; border: 1px solid #36534d; }
+      .language-switch button[aria-pressed="true"] { color: #071b17; background: #6fe2c0; }
       code { color: #6fe2c0; }
       #status { color: #6fe2c0; }
       #messages { max-height: 320px; overflow: auto; padding-left: 24px; }
@@ -28,25 +31,29 @@
   </head>
   <body>
     <main>
-      <p><a href="/">← Back to Volunteer Console</a></p>
-      <h1>Fake Elder Protocol Test</h1>
-      <p>Call <code>create-session</code> or use a signed elder token, publish the browser screen, and display received DataChannel messages unchanged.</p>
+      <div class="language-switch" role="group" aria-label="Language">
+        <button type="button" data-language="zh">中文</button>
+        <button type="button" data-language="en">English</button>
+      </div>
+      <p><a href="/" id="back-link">← Back to Volunteer Console</a></p>
+      <h1 id="page-title">Fake Elder Protocol Test</h1>
+      <p id="page-intro">Call <code>create-session</code> or use a signed elder token, publish the browser screen, and display received DataChannel messages unchanged.</p>
       <form id="connect-form">
         <div class="grid">
-          <label>Supabase URL <input id="supabase-url" type="url" /></label>
-          <label>Public anon key <input id="anon-key" type="password" autocomplete="off" /></label>
-          <label>Signed LiveKit URL (optional) <input id="livekit-url" type="url" placeholder="wss://…" /></label>
-          <label>Signed elder token (optional) <input id="livekit-token" type="password" autocomplete="off" /></label>
+          <label><span id="supabase-url-label">Supabase URL</span><input id="supabase-url" type="url" /></label>
+          <label><span id="anon-key-label">Public anon key</span><input id="anon-key" type="password" autocomplete="off" /></label>
+          <label><span id="livekit-url-label">Signed LiveKit URL (optional)</span><input id="livekit-url" type="url" placeholder="wss://…" /></label>
+          <label><span id="livekit-token-label">Signed elder token (optional)</span><input id="livekit-token" type="password" autocomplete="off" /></label>
         </div>
         <button id="connect-button" type="submit">Create Room and Share Screen</button>
       </form>
       <section class="panel">
-        <strong>Status:</strong> <span id="status" role="status" aria-live="polite">Not connected</span>
-        <p>Room code: <code id="room-code">—</code></p>
+        <strong id="status-label">Status:</strong> <span id="status" role="status" aria-live="polite">Not connected</span>
+        <p><span id="room-code-label">Room code:</span> <code id="room-code">—</code></p>
         <video id="preview" aria-label="Shared screen preview" autoplay playsinline muted></video>
       </section>
       <section class="panel">
-        <h2>Received DataChannel Messages</h2>
+        <h2 id="messages-title">Received DataChannel Messages</h2>
         <ol id="messages"></ol>
       </section>
     </main>

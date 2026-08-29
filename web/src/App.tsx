@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { AnnotationSurface } from './AnnotationSurface'
 import {
+  LanguageSwitch,
+  localizeDocument,
+  type MessageKey,
+  type UILanguage,
+  useUILanguage,
+} from './i18n'
+import {
   ApiError,
   createSecondSightApi,
   type HelpBroadcast,
@@ -21,11 +28,12 @@ import './App.css'
 interface ActiveSession {
   joined: JoinedSession
   live: VolunteerSession
-  contextLabel: string
+  context: { kind: 'room'; code: string } | { kind: 'live-request' }
   volunteerName: string
 }
 
 type ReceiverStatus = 'connecting' | 'receiving' | 'reconnecting' | 'unavailable'
+type Translator = (key: MessageKey, values?: Record<string, string | number>) => string
 
 interface AppProps {
   api?: SecondSightApi
@@ -38,6 +46,7 @@ function App({
   acquireMedia = acquireVolunteerMedia,
   connectSession = connectVolunteerSession,
 }: AppProps) {
+  const { language, setLanguage, t } = useUILanguage()
   const environment = import.meta.env
   const configuredApi = useMemo(() => api ?? createSecondSightApi({
     supabaseUrl: environment.VITE_SUPABASE_URL ?? '',
@@ -72,6 +81,10 @@ function App({
   const assistantId = useMemo(() => resolveAssistantId(), [])
 
   useEffect(() => {
+    localizeDocument(language, 'volunteerPageTitle', 'volunteerPageDescription')
+  }, [language])
+
+  useEffect(() => {
     nameRef.current = name
   }, [name])
 
@@ -85,7 +98,7 @@ function App({
       try {
         const records = await configuredApi.pollBroadcasts({
           assistantId,
-          name: nameRef.current.trim() || 'Available Volunteer',
+          name: nameRef.current.trim() || t('availableVolunteer'),
         })
         if (cancelled) return
         setBroadcasts(records)
@@ -103,7 +116,7 @@ function App({
       cancelled = true
       if (timer !== undefined) window.clearTimeout(timer)
     }
-  }, [active, assistantId, broadcastConfigured, configuredApi])
+  }, [active, assistantId, broadcastConfigured, configuredApi, t])
 
   useEffect(() => {
     if (
@@ -127,15 +140,15 @@ function App({
     if (entryInFlight.current) return
     setError('')
     if (!/^\d{6}$/.test(code)) {
-      setError('Enter the 6-digit room code.')
+      setError(t('enterRoomCode'))
       return
     }
     if (!name.trim()) {
-      setError('Enter your display name.')
+      setError(t('enterName'))
       return
     }
     if (!api && (!environment.VITE_SUPABASE_URL || !environment.VITE_SUPABASE_ANON_KEY)) {
-      setError('The service is not configured. Set the public Supabase environment variables first.')
+      setError(t('serviceNotConfigured'))
       return
     }
 
@@ -150,11 +163,11 @@ function App({
     try {
       media = await acquireMedia()
       const joined = await configuredApi.joinSession({ code, name: name.trim() })
-      await activateSession(joined, `Room ${code}`, name.trim(), media)
+      await activateSession(joined, { kind: 'room', code }, name.trim(), media)
       media = null
     } catch (cause) {
       media?.stop()
-      setError(joinFailureMessage(cause))
+      setError(joinFailureMessage(cause, t))
     } finally {
       entryInFlight.current = false
       setJoining(false)
@@ -166,7 +179,7 @@ function App({
     const volunteerName = name.trim()
     setError('')
     if (!volunteerName) {
-      setError('Enter your display name before responding to a request.')
+      setError(t('enterNameBeforeResponding'))
       return
     }
 
@@ -185,11 +198,11 @@ function App({
         assistantId,
         name: volunteerName,
       })
-      await activateSession(joined, 'Live help request', volunteerName, media)
+      await activateSession(joined, { kind: 'live-request' }, volunteerName, media)
       media = null
     } catch (cause) {
       media?.stop()
-      setError(claimFailureMessage(cause))
+      setError(claimFailureMessage(cause, t))
     } finally {
       entryInFlight.current = false
       setClaimingSessionId(null)
@@ -198,7 +211,7 @@ function App({
 
   async function activateSession(
     joined: JoinedSession,
-    contextLabel: string,
+    context: ActiveSession['context'],
     volunteerName: string,
     media: PreparedVolunteerMedia,
   ): Promise<void> {
@@ -209,7 +222,7 @@ function App({
         if (manualDisconnect.current) return
         currentSession.current = null
         setActive(null)
-        setError('The connection was interrupted. Rejoin the room to continue.')
+        setError(t('connectionInterrupted'))
       },
       onMediaChanged: (kind, isAvailable) => {
         if (kind === 'screen') setHasScreenMedia(isAvailable)
@@ -218,7 +231,7 @@ function App({
       onRisk: setSafetyRisk,
     }, media)
     currentSession.current = live
-    setActive({ joined, live, contextLabel, volunteerName })
+    setActive({ joined, live, context, volunteerName })
   }
 
   async function leaveSession(): Promise<void> {
@@ -238,7 +251,7 @@ function App({
       setSafetyRisk(null)
     }
     if (disconnectFailed) {
-      setError('Assistance ended and your camera and microphone were stopped, but the connection did not close cleanly.')
+      setError(t('disconnectUnclean'))
     }
   }
 
@@ -255,59 +268,59 @@ function App({
   return (
     <div className="app-shell">
       <header className="site-header">
-        <a className="brand" href="/" aria-label="SecondSight home">
+        <a className="brand" href="/" aria-label={t('homeAria')}>
           <span className="brand-mark" aria-hidden="true">S</span>
           <span>
             <strong>SecondSight</strong>
-            <small>A second pair of eyes</small>
+            <small>{t('tagline')}</small>
           </span>
         </a>
-        <div className="safety-promise">
-          <span aria-hidden="true">✓</span>
-          You can only watch and guide. The elder stays in control.
+        <div className="header-actions">
+          <div className="safety-promise">
+            <span aria-hidden="true">✓</span>
+            {t('safetyPromise')}
+          </div>
+          <LanguageSwitch language={language} onChange={setLanguage} />
         </div>
       </header>
 
       {!active ? (
         <main className="join-layout">
           <section className="join-copy">
-            <p className="eyebrow">WATCH · LISTEN · GUIDE</p>
-            <h1>Help older adults navigate<br />the digital world with confidence</h1>
-            <p className="intro">
-              Enter the room code shown on the elder&apos;s screen. You can talk, circle a location,
-              and draw arrows, but you cannot click, type, or control their device.
-            </p>
+            <p className="eyebrow">{t('watchListenGuide')}</p>
+            <h1>{t('heroTitle')}</h1>
+            <p className="intro">{t('heroIntro')}</p>
             <ul className="trust-list">
-              <li><span aria-hidden="true">01</span> Sensitive areas are masked on the elder&apos;s device</li>
-              <li><span aria-hidden="true">02</span> AI safety monitoring stays active throughout the session</li>
-              <li><span aria-hidden="true">03</span> Important guidance and alerts are recorded for review</li>
+              <li><span aria-hidden="true">01</span> {t('trustMasked')}</li>
+              <li><span aria-hidden="true">02</span> {t('trustMonitoring')}</li>
+              <li><span aria-hidden="true">03</span> {t('trustAudit')}</li>
             </ul>
           </section>
 
           <section className="join-card" aria-labelledby="join-title">
-            <p className="card-step">VOLUNTEER ACCESS</p>
-            <h2 id="join-title">Remote Assistance</h2>
-            <p className="card-description">Keep this page open to receive live help requests as soon as they arrive.</p>
+            <p className="card-step">{t('volunteerAccess')}</p>
+            <h2 id="join-title">{t('remoteAssistance')}</h2>
+            <p className="card-description">{t('keepOpen')}</p>
             <div className={`receiver-status receiver-status--${receiverStatus}`} role="status">
               <i aria-hidden="true" />
               <span>
-                <strong>{receiverStatusLabel(receiverStatus)}</strong>
-                <small>{receiverStatusDetail(receiverStatus)}</small>
+                <strong>{receiverStatusLabel(receiverStatus, t)}</strong>
+                <small>{receiverStatusDetail(receiverStatus, t)}</small>
               </span>
             </div>
 
             {broadcasts.length > 0 && (
               <section className="broadcast-list" aria-labelledby="broadcast-title">
                 <div className="broadcast-list__heading">
-                  <h3 id="broadcast-title">New Help Requests</h3>
-                  <span>{broadcasts.length} {broadcasts.length === 1 ? 'request' : 'requests'}</span>
+                  <h3 id="broadcast-title">{t('newRequests')}</h3>
+                  <span>{t(broadcasts.length === 1 ? 'requestCount' : 'requestsCount', { count: broadcasts.length })}</span>
                 </div>
                 {broadcasts.map((broadcast) => (
                   <article className="broadcast-card" key={broadcast.sessionId}>
                     <div>
-                      <strong>{displayElderLabel(broadcast.elderLabel)} is waiting for help</strong>
+                      <strong>{t('elderWaiting', { elder: displayElderLabel(broadcast.elderLabel, t) })}</strong>
                       <time dateTime={broadcast.requestedAt}>
-                        {formatBroadcastTime(broadcast.requestedAt)}
+                        {formatBroadcastTime(broadcast.requestedAt, language, t)}
                       </time>
                     </div>
                     <button
@@ -315,16 +328,16 @@ function App({
                       disabled={joining || claimingSessionId !== null}
                       onClick={() => void claimBroadcast(broadcast)}
                     >
-                      {claimingSessionId === broadcast.sessionId ? 'Responding…' : 'Respond'}
+                      {t(claimingSessionId === broadcast.sessionId ? 'responding' : 'respond')}
                     </button>
                   </article>
                 ))}
               </section>
             )}
 
-            <div className="join-divider"><span>Or use a room code</span></div>
+            <div className="join-divider"><span>{t('roomDivider')}</span></div>
             <form onSubmit={handleJoin}>
-              <label htmlFor="room-code">6-digit room code</label>
+              <label htmlFor="room-code">{t('roomCodeLabel')}</label>
               <input
                 id="room-code"
                 value={code}
@@ -334,13 +347,13 @@ function App({
                 placeholder="000 000"
                 aria-describedby={error ? 'join-error' : undefined}
               />
-              <label htmlFor="volunteer-name">Your display name</label>
+              <label htmlFor="volunteer-name">{t('displayNameLabel')}</label>
               <input
                 id="volunteer-name"
                 value={name}
                 onChange={(event) => setName(event.target.value.slice(0, 40))}
                 autoComplete="nickname"
-                placeholder="e.g. Alex"
+                placeholder={t('namePlaceholder')}
               />
               {error && <p className="form-error" id="join-error" role="alert">{error}</p>}
               <button
@@ -348,12 +361,11 @@ function App({
                 type="submit"
                 disabled={joining || claimingSessionId !== null}
               >
-                {joining ? 'Connecting securely…' : 'Join Assistance Session'}
+                {t(joining ? 'connectingSecurely' : 'joinSession')}
               </button>
             </form>
             <p className="media-permission-note">
-              Your browser asks for camera and microphone access only after you choose to join or respond.
-              Both are required for live assistance.
+              {t('mediaPermission')}
             </p>
           </section>
         </main>
@@ -361,37 +373,41 @@ function App({
         <main className="session-layout">
           <section className="session-heading">
             <div>
-              <p className="eyebrow">{active.contextLabel}</p>
-              <h1>Assistance in Progress</h1>
-              <p>Volunteer: {active.volunteerName}</p>
+              <p className="eyebrow">
+                {active.context.kind === 'room'
+                  ? t('roomContext', { code: active.context.code })
+                  : t('liveRequestContext')}
+              </p>
+              <h1>{t('assistanceInProgress')}</h1>
+              <p>{t('volunteerName', { name: active.volunteerName })}</p>
             </div>
             <div className="session-actions">
-              <span className="connection-pill"><i /> Securely connected</span>
+              <span className="connection-pill"><i /> {t('securelyConnected')}</span>
               <a
                 className="alerts-link"
                 href={`/alerts.html?session_id=${encodeURIComponent(active.joined.sessionId)}`}
                 target="_blank"
                 rel="noreferrer"
               >
-                View Safety Alerts
+                {t('viewAlerts')}
               </a>
               <button className="leave-button" type="button" onClick={() => void leaveSession()}>
-                End Assistance
+                {t('endAssistance')}
               </button>
             </div>
           </section>
 
-          <section className="volunteer-camera-card" aria-label="Volunteer camera status">
+          <section className="volunteer-camera-card" aria-label={t('volunteerCameraStatus')}>
             <video
               ref={localCameraRef}
-              aria-label="Your camera preview"
+              aria-label={t('cameraPreview')}
               autoPlay
               playsInline
               muted
             />
             <div>
-              <strong><i aria-hidden="true" /> Camera is on</strong>
-              <small>It turns off automatically when assistance ends</small>
+              <strong><i aria-hidden="true" /> {t('cameraOn')}</strong>
+              <small>{t('cameraAutoOff')}</small>
             </div>
           </section>
 
@@ -399,13 +415,13 @@ function App({
             <section className={`safety-risk-card ${safetyRisk.level}`} role="alert">
               <div className="safety-risk-icon" aria-hidden="true">!</div>
               <div>
-                <p className="eyebrow">LIVE SAFETY ALERT</p>
-                <h2>Potentially dangerous language detected</h2>
+                <p className="eyebrow">{t('liveSafetyAlert')}</p>
+                <h2>{t('dangerousLanguage')}</h2>
                 <p className="risk-transcript">“{safetyRisk.transcript}”</p>
-                {safetyRisk.transcript_truncated && <p>The transcript was shortened to the first 1,000 characters.</p>}
-                <p>Stop asking for verification codes, passwords, payment details, or remote-control access immediately.</p>
+                {safetyRisk.transcript_truncated && <p>{t('transcriptShortened')}</p>}
+                <p>{t('stopSensitiveRequest')}</p>
               </div>
-              <button type="button" onClick={() => setSafetyRisk(null)}>Dismiss</button>
+              <button type="button" onClick={() => setSafetyRisk(null)}>{t('dismiss')}</button>
             </section>
           )}
 
@@ -414,39 +430,40 @@ function App({
               videoRef={videoRef}
               hasMedia={hasScreenMedia}
               disabled={frozenReason !== null}
+              language={language}
               send={(message) => active.live.send(message)}
               log={audit}
-              onSendError={() => setError('Could not send the annotation. Check your connection.')}
+              onSendError={() => setError(t('annotationSendFailed'))}
             />
             <aside className="camera-panel" aria-labelledby="elder-camera-title">
               <div className="camera-heading">
                 <div>
-                  <p className="camera-kicker">FACE-TO-FACE VIDEO</p>
-                  <h2 id="elder-camera-title">Elder Camera</h2>
+                  <p className="camera-kicker">{t('faceToFace')}</p>
+                  <h2 id="elder-camera-title">{t('elderCamera')}</h2>
                 </div>
                 <span className={`camera-status ${hasCameraMedia ? 'connected' : ''}`}>
-                  {hasCameraMedia ? 'Video connected' : 'Waiting for video'}
+                  {t(hasCameraMedia ? 'videoConnected' : 'waitingVideo')}
                 </span>
               </div>
               <div className="camera-stage">
-                <video ref={cameraRef} autoPlay playsInline aria-label="Elder camera video" />
+                <video ref={cameraRef} autoPlay playsInline aria-label={t('elderCameraAria')} />
                 {!hasCameraMedia && (
                   <div className="camera-waiting" aria-live="polite">
                     <span aria-hidden="true">◎</span>
-                    <strong>Waiting for the elder to turn on their camera…</strong>
-                    <small>The video will appear automatically when it is ready</small>
+                    <strong>{t('waitingElderCamera')}</strong>
+                    <small>{t('videoAutoAppears')}</small>
                   </div>
                 )}
               </div>
               <p className="camera-note">
-                Camera video is shown separately from the masked computer screen. Annotations only appear on the shared screen.
+                {t('cameraSeparate')}
               </p>
             </aside>
           </div>
           <audio ref={audioRef} autoPlay />
           <div className="session-footer">
-            <p><strong>Remember:</strong> Describe only what you can see on the screen. Never ask for passwords, verification codes, or payment details.</p>
-            {auditFailed && <p className="audit-warning" role="status">The audit record could not be delivered. The assistance view is still active.</p>}
+            <p><strong>{t('remember')}</strong> {t('guidanceReminder')}</p>
+            {auditFailed && <p className="audit-warning" role="status">{t('auditFailed')}</p>}
             {error && <p className="form-error" role="alert">{error}</p>}
           </div>
         </main>
@@ -461,10 +478,10 @@ function App({
         >
           <div className="freeze-card">
             <span className="freeze-icon" aria-hidden="true">!</span>
-            <p className="eyebrow">SAFETY PROTECTION IS ACTIVE</p>
-            <h2 id="freeze-title">The AI safety monitor paused this session</h2>
+            <p className="eyebrow">{t('safetyActive')}</p>
+            <h2 id="freeze-title">{t('safetyPaused')}</h2>
             <p id="freeze-reason">{frozenReason}</p>
-            <small id="freeze-guidance">Stop asking for sensitive information. Only the elder can decide whether to resume.</small>
+            <small id="freeze-guidance">{t('safetyGuidance')}</small>
           </div>
         </div>
       )}
@@ -472,26 +489,26 @@ function App({
   )
 }
 
-function joinFailureMessage(cause: unknown): string {
+function joinFailureMessage(cause: unknown, t: Translator): string {
   if (cause instanceof ApiError) {
-    if (cause.status === 404) return 'Room not found. Check the room code with the elder.'
-    if (cause.status === 410) return 'This assistance session has ended. Ask the elder to start a new one.'
-    if (cause.status === 423) return 'The safety monitor paused this session. Wait for the elder to continue.'
-    if (cause.status === 409) return 'Another volunteer already responded to this request.'
-    if (cause.status === 401 || cause.status === 403) return 'The connection credentials are invalid. Contact the session coordinator.'
-    return cause.message
+    if (cause.status === 404) return t('roomNotFound')
+    if (cause.status === 410) return t('sessionEnded')
+    if (cause.status === 423) return t('sessionPaused')
+    if (cause.status === 409) return t('alreadyClaimed')
+    if (cause.status === 401 || cause.status === 403) return t('invalidCredentials')
+    return t('joinFailed')
   }
   if (cause instanceof DOMException && cause.name === 'NotAllowedError') {
-    return 'Camera and microphone access are required to assist. Allow access, then try again.'
+    return t('mediaRequired')
   }
-  return 'Unable to join the room. Check your connection, then try again.'
+  return t('joinFailed')
 }
 
-function claimFailureMessage(cause: unknown): string {
+function claimFailureMessage(cause: unknown, t: Translator): string {
   if (cause instanceof ApiError && cause.status === 409) {
-    return 'Another volunteer just responded to this request. Wait for the next request.'
+    return t('justClaimed')
   }
-  return joinFailureMessage(cause)
+  return joinFailureMessage(cause, t)
 }
 
 function resolveAssistantId(): string {
@@ -507,39 +524,40 @@ function resolveAssistantId(): string {
   }
 }
 
-function receiverStatusLabel(status: ReceiverStatus): string {
+function receiverStatusLabel(status: ReceiverStatus, t: Translator): string {
   switch (status) {
-    case 'connecting': return 'Connecting to the request service'
-    case 'receiving': return 'Listening for help requests'
-    case 'reconnecting': return 'Reconnecting to the request service'
-    case 'unavailable': return 'Live requests are not configured'
+    case 'connecting': return t('receiverConnecting')
+    case 'receiving': return t('receiverReceiving')
+    case 'reconnecting': return t('receiverReconnecting')
+    case 'unavailable': return t('receiverUnavailable')
   }
 }
 
-function receiverStatusDetail(status: ReceiverStatus): string {
+function receiverStatusDetail(status: ReceiverStatus, t: Translator): string {
   switch (status) {
-    case 'connecting': return 'Registering your availability…'
-    case 'receiving': return 'New elder requests will appear automatically'
-    case 'reconnecting': return 'The page will resume automatically without duplicate claims'
-    case 'unavailable': return 'You can still join with the 6-digit room code below'
+    case 'connecting': return t('receiverConnectingDetail')
+    case 'receiving': return t('receiverReceivingDetail')
+    case 'reconnecting': return t('receiverReconnectingDetail')
+    case 'unavailable': return t('receiverUnavailableDetail')
   }
 }
 
-function formatBroadcastTime(value: string): string {
+function formatBroadcastTime(value: string, language: UILanguage, t: Translator): string {
   const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return 'Sent just now'
-  return `Sent at ${new Intl.DateTimeFormat('en-AU', {
+  if (Number.isNaN(date.getTime())) return t('sentJustNow')
+  const time = new Intl.DateTimeFormat(language === 'zh' ? 'zh-CN' : 'en-AU', {
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
-  }).format(date)}`
+  }).format(date)
+  return t('sentAt', { time })
 }
 
-function displayElderLabel(value: string): string {
+function displayElderLabel(value: string, t: Translator): string {
   const label = value.trim()
   const isKnownDefault = label.length === 2 &&
     label.codePointAt(0) === 0x957f && label.codePointAt(1) === 0x8f88
-  return !label || isKnownDefault ? 'The elder' : label
+  return !label || isKnownDefault ? t('defaultElder') : label
 }
 
 export default App

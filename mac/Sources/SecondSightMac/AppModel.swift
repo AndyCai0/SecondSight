@@ -12,13 +12,13 @@ enum SafetyMonitoringState: Equatable {
     case degraded
     case disconnected
 
-    var headline: String {
+    func headline(for language: AppLanguage) -> String {
         switch self {
-        case .off: "安全监听：已关闭"
-        case .connecting: "安全监听：连接中"
-        case .listening: "安全监听：已开启"
-        case .degraded: "安全监听：部分功能异常"
-        case .disconnected: "安全监听：连接已断开"
+        case .off: localized("安全监听：已关闭", "Safety monitoring: Off", for: language)
+        case .connecting: localized("安全监听：连接中", "Safety monitoring: Connecting", for: language)
+        case .listening: localized("安全监听：已开启", "Safety monitoring: On", for: language)
+        case .degraded: localized("安全监听：部分功能异常", "Safety monitoring: Partially unavailable", for: language)
+        case .disconnected: localized("安全监听：连接已断开", "Safety monitoring: Disconnected", for: language)
         }
     }
 }
@@ -27,21 +27,36 @@ enum SafetyMonitoringState: Equatable {
 final class AppModel: ObservableObject {
     @Published private(set) var phase: SessionPhase = .idle
     @Published private(set) var roomCode: String?
-    @Published var statusMessage = "可以呼叫在线助手，也可以使用分享码"
-    @Published var errorMessage: String?
-    @Published var guideStatus = "按住说话，松开后我会给您指路"
+    @Published var language = AppLanguage.savedOrSystemDefault {
+        didSet {
+            UserDefaults.standard.set(language.rawValue, forKey: AppLanguage.preferenceKey)
+            overlay.model.language = language
+        }
+    }
+    @Published var statusMessage = copy(
+        "可以呼叫在线助手，也可以使用分享码",
+        "Call an online volunteer or use a room code"
+    )
+    @Published var errorMessage: LocalizedCopy?
+    @Published var guideStatus = copy(
+        "按住说话，松开后我会给您指路",
+        "Hold to speak, then release for guidance"
+    )
     @Published var isGuideRecording = false
     @Published private(set) var safetyState: SafetyMonitoringState = .off
-    @Published private(set) var safetyStatusMessage = "点击“开始安全监听”后才会启用保护。"
+    @Published private(set) var safetyStatusMessage = copy(
+        "点击“开始安全监听”后才会启用保护。",
+        "Select “Start safety monitoring” to turn on protection."
+    )
     @Published private(set) var livePartialTranscript = ""
     @Published private(set) var recentTranscriptLines: [String] = []
     @Published var isCameraConsentPresented = false
     @Published private(set) var isPreparingHelp = false
     @Published private(set) var cameraNeedsSettings = false
-    @Published private(set) var mediaRecoveryMessage: String?
+    @Published private(set) var mediaRecoveryMessage: LocalizedCopy?
     @Published private(set) var assistanceDiscoveryMode: AssistanceDiscoveryMode?
     @Published private(set) var notifiedAssistantCount: Int?
-    @Published private(set) var broadcastMessage: String?
+    @Published private(set) var broadcastMessage: LocalizedCopy?
     @Published private(set) var isCallTransportConnected = false
 
     private static let defaultAIEnabled = false
@@ -78,14 +93,18 @@ final class AppModel: ObservableObject {
         aiFeaturesEnabled = Self.defaultAIEnabled
         permissions = PermissionManager(includeAIFeatures: Self.defaultAIEnabled)
         do { api = EdgeAPIClient(configuration: try AppConfiguration.load()) }
-        catch { errorMessage = error.localizedDescription }
+        catch { errorMessage = localizedError(error) }
+        overlay.model.language = language
         wireServices()
     }
 
     func startHelp(using discoveryMode: AssistanceDiscoveryMode) {
         guard phase == .idle || phase == .ended else { return }
         guard permissions.allAuthorized else {
-            errorMessage = "请先把下面列出的权限都设为“已允许”。"
+            errorMessage = copy(
+                "请先把下面列出的权限都设为“已允许”。",
+                "Set every permission below to “Allowed” first."
+            )
             return
         }
         errorMessage = nil
@@ -102,16 +121,22 @@ final class AppModel: ObservableObject {
         else { return }
         isCameraConsentPresented = false
         isPreparingHelp = true
-        statusMessage = "正在准备摄像头……"
+        statusMessage = copy("正在准备摄像头……", "Preparing the camera…")
         Task {
             let granted = await requestCameraAccess()
             guard granted else {
                 isPreparingHelp = false
                 cameraNeedsSettings = AVCaptureDevice.authorizationStatus(for: .video) == .denied
-                statusMessage = "摄像头没有打开"
+                statusMessage = copy("摄像头没有打开", "The camera is not on")
                 errorMessage = cameraNeedsSettings
-                    ? "请在系统设置里允许摄像头，然后再点“求助”。"
-                    : "需要允许摄像头，才能进入视频通话。"
+                    ? copy(
+                        "请在系统设置里允许摄像头，然后再点“求助”。",
+                        "Allow camera access in System Settings, then request help again."
+                    )
+                    : copy(
+                        "需要允许摄像头，才能进入视频通话。",
+                        "Camera access is required to start a video call."
+                    )
                 return
             }
             cameraNeedsSettings = false
@@ -123,7 +148,7 @@ final class AppModel: ObservableObject {
     func cancelCameraConsent() {
         isCameraConsentPresented = false
         pendingDiscoveryMode = nil
-        statusMessage = "已取消，摄像头没有打开"
+        statusMessage = copy("已取消，摄像头没有打开", "Cancelled. The camera is not on.")
     }
 
     func openCameraSettings() {
@@ -135,7 +160,10 @@ final class AppModel: ObservableObject {
 
     func retryFailedMedia() {
         mediaRecoveryMessage = nil
-        statusMessage = "正在重新连接摄像头和共享画面……"
+        statusMessage = copy(
+            "正在重新连接摄像头和共享画面……",
+            "Reconnecting the camera and shared screen…"
+        )
         transport.retryFailedMedia()
         guard screenCaptureFailed else { return }
         Task {
@@ -144,8 +172,14 @@ final class AppModel: ObservableObject {
                 screenCaptureFailed = false
             } catch {
                 screenCaptureFailed = true
-                mediaRecoveryMessage = "电脑画面重连失败：\(error.localizedDescription)"
-                statusMessage = "摄像头仍可继续，电脑画面需要再次重连"
+                mediaRecoveryMessage = copy(
+                    "电脑画面重连失败：\(error.localizedDescription)",
+                    "Could not reconnect the computer screen: \(error.localizedDescription)"
+                )
+                statusMessage = copy(
+                    "摄像头仍可继续，电脑画面需要再次重连",
+                    "The camera is still available, but the computer screen must reconnect"
+                )
             }
         }
     }
@@ -164,7 +198,7 @@ final class AppModel: ObservableObject {
     private func beginHelpSession(using discoveryMode: AssistanceDiscoveryMode) async {
         if api == nil {
             do { api = EdgeAPIClient(configuration: try AppConfiguration.load()) }
-            catch { errorMessage = error.localizedDescription; return }
+            catch { errorMessage = localizedError(error); return }
         }
         guard let api else { return }
         do {
@@ -174,7 +208,7 @@ final class AppModel: ObservableObject {
             }
             _ = try machine.apply(.requestHelp)
             phase = machine.phase
-            statusMessage = "正在为您联系帮助……"
+            statusMessage = copy("正在为您联系帮助……", "Finding help for you…")
             errorMessage = nil
             mediaRecoveryMessage = nil
             broadcastMessage = nil
@@ -189,8 +223,14 @@ final class AppModel: ObservableObject {
             _ = try machine.apply(.sessionCreated)
             phase = machine.phase
             statusMessage = discoveryMode == .broadcast
-                ? "正在连接摄像头和电脑画面，随后呼叫在线助手"
-                : "房间号码是 \(response.code)，摄像头和电脑画面正在连接"
+                ? copy(
+                    "正在连接摄像头和电脑画面，随后呼叫在线助手",
+                    "Connecting the camera and computer screen, then calling online volunteers"
+                )
+                : copy(
+                    "房间号码是 \(response.code)，摄像头和电脑画面正在连接",
+                    "Your room code is \(response.code). Connecting the camera and computer screen."
+                )
             overlay.show()
             isCallTransportConnected = false
             try await transport.connect(url: response.liveKitURL, token: response.liveKitToken)
@@ -210,7 +250,10 @@ final class AppModel: ObservableObject {
     private func startAssistantBroadcast(sessionID: UUID, fallbackCode: String) async {
         guard let api else { return }
         broadcastSessionID = sessionID
-        statusMessage = "正在向在线助手广播求助……"
+        statusMessage = copy(
+            "正在向在线助手广播求助……",
+            "Broadcasting your request to online volunteers…"
+        )
         do {
             let response = try await api.setSessionBroadcast(
                 BroadcastSessionRequest(sessionID: sessionID, isActive: true)
@@ -224,25 +267,52 @@ final class AppModel: ObservableObject {
             notifiedAssistantCount = response.notifiedAssistants
             if let count = response.notifiedAssistants {
                 statusMessage = count > 0
-                    ? "已通知 \(count) 位在线助手，正在等待一位助手响应"
-                    : "广播已经发出，目前还没有助手在线"
+                    ? copy(
+                        "已通知 \(count) 位在线助手，正在等待一位助手响应",
+                        "Notified \(count) online volunteer(s). Waiting for one to respond."
+                    )
+                    : copy(
+                        "广播已经发出，目前还没有助手在线",
+                        "Your request was broadcast, but no volunteers are online yet"
+                    )
             } else {
-                statusMessage = "已向在线助手广播求助，正在等待一位助手响应"
+                statusMessage = copy(
+                    "已向在线助手广播求助，正在等待一位助手响应",
+                    "Your request was broadcast. Waiting for a volunteer to respond."
+                )
             }
-            broadcastMessage = "第一位响应的助手会接入；您也可以把备用分享码告诉认识的人。"
-            speech.speak("求助信息已经发给在线助手，请稍等。")
+            broadcastMessage = copy(
+                "第一位响应的助手会接入；您也可以把备用分享码告诉认识的人。",
+                "The first volunteer to respond will join. You can also share the backup room code with someone you know."
+            )
+            speech.speak(localized(
+                "求助信息已经发给在线助手，请稍等。",
+                "Your help request has been sent to online volunteers. Please wait.",
+                for: language
+            ))
         } catch {
             guard phase == .waiting else { return }
             assistanceDiscoveryMode = .shareCode
             notifiedAssistantCount = nil
-            broadcastMessage = "在线助手广播暂时不可用，房间仍然安全可用。请把下面的分享码告诉帮助您的人。"
-            statusMessage = "广播暂时不可用，请使用分享码求助"
+            broadcastMessage = copy(
+                "在线助手广播暂时不可用，房间仍然安全可用。请把下面的分享码告诉帮助您的人。",
+                "Online volunteer broadcast is temporarily unavailable. The room is still secure; share the code below with someone who can help."
+            )
+            statusMessage = copy(
+                "广播暂时不可用，请使用分享码求助",
+                "Broadcast is unavailable. Use the room code to request help."
+            )
             speakShareCode(fallbackCode)
         }
     }
 
     private func speakShareCode(_ code: String) {
-        speech.speak("您的房间号码是，\(code.map(String.init).joined(separator: "，"))")
+        let spokenCode = code.map(String.init).joined(separator: language == .chinese ? "，" : ", ")
+        speech.speak(localized(
+            "您的房间号码是，\(spokenCode)",
+            "Your room code is \(spokenCode)",
+            for: language
+        ))
     }
 
     func endSession() {
@@ -253,7 +323,10 @@ final class AppModel: ObservableObject {
         guard aiFeaturesEnabled else { return }
         guard !isGuideRecording else { return }
         guard sessionID != nil, capture.latestFrame.get() != nil else {
-            errorMessage = "请先点“求助”，等画面准备好后再用 AI 帮我。"
+            errorMessage = copy(
+                "请先点“求助”，等画面准备好后再用 AI 帮我。",
+                "Request help first, then wait for the screen before using AI guidance."
+            )
             return
         }
         do {
@@ -261,16 +334,19 @@ final class AppModel: ObservableObject {
                 Task { @MainActor in await self?.guideSpeechCompleted(result) }
             }
             isGuideRecording = true
-            guideStatus = "我在听，请说您想做什么……"
+            guideStatus = copy("我在听，请说您想做什么……", "I’m listening. Tell me what you want to do…")
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = localizedError(error)
         }
     }
 
     func stopGuideRecording() {
         guard isGuideRecording else { return }
         isGuideRecording = false
-        guideStatus = "正在看屏幕，马上告诉您下一步……"
+        guideStatus = copy(
+            "正在看屏幕，马上告诉您下一步……",
+            "Checking the screen. I’ll tell you the next step shortly…"
+        )
         guideSpeech.stop()
     }
 
@@ -295,7 +371,16 @@ final class AppModel: ObservableObject {
         let transcript = currentRiskTranscript
         dismissSafetyWarning()
         stopSafetyListening()
-        Task { await freeze(reason: "检测到可能索要敏感信息或要求危险操作", transcript: transcript) }
+        Task {
+            await freeze(
+                reason: localized(
+                    "检测到可能索要敏感信息或要求危险操作",
+                    "A request for sensitive information or a dangerous action was detected",
+                    for: language
+                ),
+                transcript: transcript
+            )
+        }
     }
 
     func contactVolunteerAboutRisk() {
@@ -308,10 +393,19 @@ final class AppModel: ObservableObject {
                     transcript: transcript,
                     matchedRules: risk.matchedRules
                 ))
-                statusMessage = "安全提醒已经发送给志愿者"
+                statusMessage = copy(
+                    "安全提醒已经发送给志愿者",
+                    "The safety alert was sent to the volunteer"
+                )
             } catch {
-                markSafetyMonitoringDegraded(reason: "志愿者通知暂时不可用。")
-                errorMessage = "志愿者通知暂时未送达，请直接停止通话或联系信任的人。"
+                markSafetyMonitoringDegraded(reason: copy(
+                    "志愿者通知暂时不可用。",
+                    "Volunteer notifications are temporarily unavailable."
+                ))
+                errorMessage = copy(
+                    "志愿者通知暂时未送达，请直接停止通话或联系信任的人。",
+                    "The volunteer did not receive the alert. End the call or contact someone you trust."
+                )
             }
         }
         dismissSafetyWarning()
@@ -319,16 +413,25 @@ final class AppModel: ObservableObject {
 
     private func startSafetyListening() {
         guard phase == .connected, isCallTransportConnected else {
-            errorMessage = "请等志愿者加入且通话连接正常后，再开始安全监听。"
+            errorMessage = copy(
+                "请等志愿者加入且通话连接正常后，再开始安全监听。",
+                "Wait for a volunteer to join and for the call to connect before starting safety monitoring."
+            )
             return
         }
         guard permissions.statuses[.microphone] == .authorized else {
             permissions.request(.microphone)
-            errorMessage = "请先允许麦克风权限，再开始安全监听。"
+            errorMessage = copy(
+                "请先允许麦克风权限，再开始安全监听。",
+                "Allow microphone access before starting safety monitoring."
+            )
             return
         }
         guard sessionID != nil, api != nil, elderLiveKitCredential != nil else {
-            errorMessage = "安全监听服务尚未配置。"
+            errorMessage = copy(
+                "安全监听服务尚未配置。",
+                "The safety monitoring service is not configured."
+            )
             return
         }
 
@@ -337,8 +440,8 @@ final class AppModel: ObservableObject {
         safetyCredentialRequestInFlight = false
         safetyState = .connecting
         safetyStatusMessage = volunteerAudioTrack == nil
-            ? "正在等待志愿者的声音……"
-            : "正在连接实时字幕……"
+            ? copy("正在等待志愿者的声音……", "Waiting for the volunteer’s audio…")
+            : copy("正在连接实时字幕……", "Connecting live captions…")
         livePartialTranscript = ""
         recentTranscriptLines = []
         recentTranscript = RecentTranscriptBuffer(window: 25, maximumEntries: 40)
@@ -358,7 +461,7 @@ final class AppModel: ObservableObject {
         safetyCredentialRequestInFlight = false
         safetyStreaming.stop()
         safetyState = .off
-        safetyStatusMessage = "安全监听已经停止。"
+        safetyStatusMessage = copy("安全监听已经停止。", "Safety monitoring has stopped.")
         livePartialTranscript = ""
         dismissSafetyWarning()
     }
@@ -372,7 +475,10 @@ final class AppModel: ObservableObject {
 
     private func remoteAudioBecameUnavailable() {
         volunteerAudioTrack = nil
-        safetyMonitoringDisconnected(reason: "志愿者声音已经断开。")
+        safetyMonitoringDisconnected(reason: copy(
+            "志愿者声音已经断开。",
+            "The volunteer’s audio disconnected."
+        ))
     }
 
     private func beginSafetyStreaming(track: RemoteAudioTrack) {
@@ -382,7 +488,7 @@ final class AppModel: ObservableObject {
               let requestID = safetyRequestID
         else { return }
         safetyCredentialRequestInFlight = true
-        safetyStatusMessage = "正在连接实时字幕……"
+        safetyStatusMessage = copy("正在连接实时字幕……", "Connecting live captions…")
 
         Task {
             do {
@@ -398,32 +504,41 @@ final class AppModel: ObservableObject {
             } catch {
                 guard safetyRequestID == requestID else { return }
                 safetyCredentialRequestInFlight = false
-                safetyMonitoringDisconnected(reason: "无法连接实时字幕服务，请稍后重试。")
+                safetyMonitoringDisconnected(reason: copy(
+                    "无法连接实时字幕服务，请稍后重试。",
+                    "Could not connect to live captions. Try again later."
+                ))
             }
         }
     }
 
-    private func safetyMonitoringDisconnected(reason: String) {
+    private func safetyMonitoringDisconnected(reason: LocalizedCopy) {
         guard safetyState == .connecting || safetyState == .listening || safetyState == .degraded else { return }
         safetyStartRequested = false
         safetyRequestID = nil
         safetyCredentialRequestInFlight = false
         safetyStreaming.stop()
         safetyState = .disconnected
-        safetyStatusMessage = "当前没有安全保护：\(reason)"
+        safetyStatusMessage = copy(
+            "当前没有安全保护：\(reason.chinese)",
+            "Safety protection is unavailable: \(reason.english)"
+        )
         livePartialTranscript = ""
     }
 
-    private func callTransportDisconnected(reason: String) {
+    private func callTransportDisconnected(reason: LocalizedCopy) {
         isCallTransportConnected = false
         volunteerAudioTrack = nil
         safetyMonitoringDisconnected(reason: reason)
     }
 
-    private func markSafetyMonitoringDegraded(reason: String) {
+    private func markSafetyMonitoringDegraded(reason: LocalizedCopy) {
         guard safetyState == .listening || safetyState == .degraded else { return }
         safetyState = .degraded
-        safetyStatusMessage = "本机提醒仍在工作：\(reason)"
+        safetyStatusMessage = copy(
+            "本机提醒仍在工作：\(reason.chinese)",
+            "On-device alerts are still working: \(reason.english)"
+        )
     }
 
     private func handleSafetyTranscript(_ update: StreamingTranscript) async {
@@ -434,12 +549,12 @@ final class AppModel: ObservableObject {
         if update.isFinal {
             livePartialTranscript = ""
             recentTranscript.append(update.text, at: now)
-            recentTranscriptLines.append("志愿者：\(update.text)")
+            recentTranscriptLines.append(update.text)
             if recentTranscriptLines.count > 6 {
                 recentTranscriptLines.removeFirst(recentTranscriptLines.count - 6)
             }
         } else {
-            livePartialTranscript = "志愿者：\(update.text)"
+            livePartialTranscript = update.text
         }
 
         let decision = await riskPipeline.analyze(
@@ -461,7 +576,11 @@ final class AppModel: ObservableObject {
         currentRiskTranscript = update.text
         overlay.model.showSafetyWarning(level: decision.level, transcript: update.text)
         overlay.setSafetyWarningVisible(true)
-        speech.speak("安全提醒。不要告诉任何人验证码、密码或银行卡信息。")
+        speech.speak(localized(
+            "安全提醒。不要告诉任何人验证码、密码或银行卡信息。",
+            "Safety alert. Never share verification codes, passwords, or bank details.",
+            for: language
+        ))
 
         let message = DataMessage.safetyRisk(
             level: decision.level,
@@ -479,8 +598,14 @@ final class AppModel: ObservableObject {
             do {
                 try await transport.publish(message)
             } catch {
-                markSafetyMonitoringDegraded(reason: "志愿者通知暂时不可用。")
-                errorMessage = "本机安全提醒仍在工作，但志愿者通知暂时未送达。"
+                markSafetyMonitoringDegraded(reason: copy(
+                    "志愿者通知暂时不可用。",
+                    "Volunteer notifications are temporarily unavailable."
+                ))
+                errorMessage = copy(
+                    "本机安全提醒仍在工作，但志愿者通知暂时未送达。",
+                    "On-device safety alerts still work, but the volunteer notification was not delivered."
+                )
             }
             do {
                 _ = try await api.recordRiskEvent(
@@ -488,8 +613,14 @@ final class AppModel: ObservableObject {
                     elderCredential: elderLiveKitCredential
                 )
             } catch {
-                markSafetyMonitoringDegraded(reason: "后端告警记录暂时不可用。")
-                errorMessage = "安全提醒仍在本机工作，但告警记录暂时未送达。"
+                markSafetyMonitoringDegraded(reason: copy(
+                    "后端告警记录暂时不可用。",
+                    "Server-side alert records are temporarily unavailable."
+                ))
+                errorMessage = copy(
+                    "安全提醒仍在本机工作，但告警记录暂时未送达。",
+                    "Safety alerts still work on this Mac, but the alert record was not delivered."
+                )
             }
         }
     }
@@ -502,14 +633,17 @@ final class AppModel: ObservableObject {
             overlay.model.resume()
             overlay.setFrozen(false)
             transport.resumeMedia()
-            statusMessage = "通话已恢复，画面仍会自动保护敏感信息"
+            statusMessage = copy(
+                "通话已恢复，画面仍会自动保护敏感信息",
+                "The call has resumed. Sensitive information will still be protected automatically."
+            )
             Task {
                 try? await transport.publish(.resume)
                 if let sessionID {
                     await api?.logEvent(LogEventRequest(sessionID: sessionID, actor: "elder", kind: "control.resume", payload: [:]))
                 }
             }
-        } catch { errorMessage = error.localizedDescription }
+        } catch { errorMessage = localizedError(error) }
     }
 
     private func wireServices() {
@@ -517,8 +651,14 @@ final class AppModel: ObservableObject {
         capture.onError = { [weak self] error in
             Task { @MainActor in
                 self?.screenCaptureFailed = true
-                self?.mediaRecoveryMessage = "电脑画面采集停止：\(error.localizedDescription)"
-                self?.statusMessage = "摄像头仍可继续，电脑画面需要重连"
+                self?.mediaRecoveryMessage = copy(
+                    "电脑画面采集停止：\(error.localizedDescription)",
+                    "Computer screen capture stopped: \(error.localizedDescription)"
+                )
+                self?.statusMessage = copy(
+                    "摄像头仍可继续，电脑画面需要重连",
+                    "The camera is still available, but the computer screen must reconnect"
+                )
             }
         }
         transport.onVolunteerJoined = { [weak self] identity in
@@ -538,7 +678,10 @@ final class AppModel: ObservableObject {
         }
         transport.onReconnecting = { [weak self] in
             Task { @MainActor in
-                self?.callTransportDisconnected(reason: "通话正在重新连接，安全监听已经停止。")
+                self?.callTransportDisconnected(reason: copy(
+                    "通话正在重新连接，安全监听已经停止。",
+                    "The call is reconnecting, so safety monitoring has stopped."
+                ))
             }
         }
         transport.onReconnected = { [weak self] in
@@ -546,7 +689,10 @@ final class AppModel: ObservableObject {
                 guard let self else { return }
                 self.isCallTransportConnected = true
                 if self.safetyState == .disconnected {
-                    self.safetyStatusMessage = "通话已经恢复。请重新点击“开始安全监听”。"
+                    self.safetyStatusMessage = copy(
+                        "通话已经恢复。请重新点击“开始安全监听”。",
+                        "The call has reconnected. Select “Start safety monitoring” again."
+                    )
                 }
             }
         }
@@ -558,8 +704,14 @@ final class AppModel: ObservableObject {
         }
         transport.onMediaError = { [weak self] kind, error in
             Task { @MainActor in
-                self?.mediaRecoveryMessage = "\(kind.displayName)连接失败：\(error.localizedDescription)"
-                self?.statusMessage = "部分画面没有连上，其他通话内容仍可继续"
+                self?.mediaRecoveryMessage = copy(
+                    "\(kind.displayName)连接失败：\(error.localizedDescription)",
+                    "Could not connect \(Self.englishDisplayName(for: kind)): \(error.localizedDescription)"
+                )
+                self?.statusMessage = copy(
+                    "部分画面没有连上，其他通话内容仍可继续",
+                    "Some video did not connect, but the rest of the call can continue"
+                )
             }
         }
         transport.onAllMediaReady = { [weak self] in
@@ -567,36 +719,60 @@ final class AppModel: ObservableObject {
                 guard let self else { return }
                 self.mediaRecoveryMessage = nil
                 if self.phase == .connected {
-                    self.statusMessage = "视频通话已连接，摄像头和电脑画面都在分享"
+                    self.statusMessage = copy(
+                        "视频通话已连接，摄像头和电脑画面都在分享",
+                        "Video call connected. The camera and computer screen are both being shared."
+                    )
                 } else if self.assistanceDiscoveryMode == .broadcast {
                     if let count = self.notifiedAssistantCount {
                         self.statusMessage = count > 0
-                            ? "已通知 \(count) 位在线助手，正在等待一位助手响应"
-                            : "广播已经发出，目前还没有助手在线"
+                            ? copy(
+                                "已通知 \(count) 位在线助手，正在等待一位助手响应",
+                                "Notified \(count) online volunteer(s). Waiting for one to respond."
+                            )
+                            : copy(
+                                "广播已经发出，目前还没有助手在线",
+                                "Your request was broadcast, but no volunteers are online yet"
+                            )
                     } else {
-                        self.statusMessage = "摄像头和电脑画面已连接，正在呼叫在线助手"
+                        self.statusMessage = copy(
+                            "摄像头和电脑画面已连接，正在呼叫在线助手",
+                            "Camera and computer screen connected. Calling online volunteers."
+                        )
                     }
                 } else {
-                    self.statusMessage = "摄像头和电脑画面已连接，正在等待对方加入"
+                    self.statusMessage = copy(
+                        "摄像头和电脑画面已连接，正在等待对方加入",
+                        "Camera and computer screen connected. Waiting for the other person to join."
+                    )
                 }
             }
         }
         transport.onError = { [weak self] error in
             Task { @MainActor in
-                self?.errorMessage = "通话连接有问题：\(error.localizedDescription)"
-                self?.callTransportDisconnected(reason: "通话连接已中断。")
+                self?.errorMessage = copy(
+                    "通话连接有问题：\(error.localizedDescription)",
+                    "There is a problem with the call connection: \(error.localizedDescription)"
+                )
+                self?.callTransportDisconnected(reason: copy(
+                    "通话连接已中断。",
+                    "The call connection was interrupted."
+                ))
             }
         }
         transport.onDisconnected = { [weak self] in
             Task { @MainActor in
-                self?.callTransportDisconnected(reason: "通话连接已经关闭。")
+                self?.callTransportDisconnected(reason: copy(
+                    "通话连接已经关闭。",
+                    "The call connection has closed."
+                ))
             }
         }
         safetyStreaming.onConnected = { [weak self] in
             Task { @MainActor in
                 guard self?.safetyStartRequested == true else { return }
                 self?.safetyState = .listening
-                self?.safetyStatusMessage = "正在监听……"
+                self?.safetyStatusMessage = copy("正在监听……", "Listening…")
             }
         }
         safetyStreaming.onTranscript = { [weak self] update in
@@ -604,7 +780,10 @@ final class AppModel: ObservableObject {
         }
         safetyStreaming.onDisconnected = { [weak self] _ in
             Task { @MainActor in
-                self?.safetyMonitoringDisconnected(reason: "实时字幕连接已断开，请稍后重试。")
+                self?.safetyMonitoringDisconnected(reason: copy(
+                    "实时字幕连接已断开，请稍后重试。",
+                    "Live captions disconnected. Try again later."
+                ))
             }
         }
         overlay.model.onResume = { [weak self] in self?.resumeAfterFalsePositive() }
@@ -620,8 +799,15 @@ final class AppModel: ObservableObject {
             phase = machine.phase
             broadcastMessage = nil
             notifiedAssistantCount = nil
-            statusMessage = "帮助您的人已经加入，只能看和指，不能控制您的电脑"
-            speech.speak("帮助您的人已经加入。请记住，密码和验证码谁都不能告诉。")
+            statusMessage = copy(
+                "帮助您的人已经加入，只能看和指，不能控制您的电脑",
+                "Your volunteer has joined. They can only watch and guide, not control your computer."
+            )
+            speech.speak(localized(
+                "帮助您的人已经加入。请记住，密码和验证码谁都不能告诉。",
+                "Your volunteer has joined. Remember: never share passwords or verification codes.",
+                for: language
+            ))
             if let broadcastSessionID, let api {
                 Task {
                     _ = try? await api.setSessionBroadcast(
@@ -629,12 +815,15 @@ final class AppModel: ObservableObject {
                     )
                 }
             }
-        } catch { errorMessage = error.localizedDescription }
+        } catch { errorMessage = localizedError(error) }
     }
 
     private func volunteerLeft(identity _: String) async {
         guard phase == .waiting || phase == .connected || phase == .frozen else { return }
-        await endSessionNow(statusMessage: "帮助您的人已结束协助，本次求助已经结束")
+        await endSessionNow(statusMessage: copy(
+            "帮助您的人已结束协助，本次求助已经结束",
+            "The volunteer ended the assistance session."
+        ))
     }
 
     private func handleDataMessage(_ message: DataMessage) {
@@ -658,10 +847,17 @@ final class AppModel: ObservableObject {
             stopSafetyListening()
             _ = try machine.apply(.freeze)
             phase = machine.phase
-            statusMessage = "通话已暂停，请先看屏幕上的安全提醒"
+            statusMessage = copy(
+                "通话已暂停，请先看屏幕上的安全提醒",
+                "The call is paused. Read the safety alert on screen."
+            )
             overlay.model.freeze(reason: reason)
             overlay.setFrozen(true)
-            speech.speak("检测到可疑请求，通话已暂停。请勿告诉任何人您的密码或验证码")
+            speech.speak(localized(
+                "检测到可疑请求，通话已暂停。请勿告诉任何人您的密码或验证码",
+                "A suspicious request was detected and the call was paused. Never share passwords or verification codes.",
+                for: language
+            ))
             await transport.freezeMedia()
             try? await transport.publish(.freeze(reason: reason))
             if let sessionID {
@@ -672,19 +868,25 @@ final class AppModel: ObservableObject {
                     payload: ["reason": .string(reason), "transcript": .string(transcript)]
                 ))
             }
-        } catch { errorMessage = error.localizedDescription }
+        } catch { errorMessage = localizedError(error) }
     }
 
     private func guideSpeechCompleted(_ result: Result<String, Error>) async {
         isGuideRecording = false
         switch result {
         case let .failure(error):
-            errorMessage = "没有听清：\(error.localizedDescription)"
-            guideStatus = "请按住再说一次"
+            errorMessage = copy(
+                "没有听清：\(error.localizedDescription)",
+                "I couldn’t understand that: \(error.localizedDescription)"
+            )
+            guideStatus = copy("请按住再说一次", "Hold the button and try again")
         case let .success(taskText):
             guard let sessionID, let frame = capture.latestFrame.get(), let api else { return }
             guard let jpeg = await Task.detached(priority: .userInitiated, operation: { RedactedJPEGEncoder.encode(frame) }).value else {
-                errorMessage = "无法准备安全截图。"
+                errorMessage = copy(
+                    "无法准备安全截图。",
+                    "Could not prepare a protected screenshot."
+                )
                 return
             }
             do {
@@ -695,23 +897,31 @@ final class AppModel: ObservableObject {
                     axSummary: scanner.store.current().axSummary
                 )
                 let response = try await api.requestGuide(request)
-                guideStatus = response.instructionText
+                guideStatus = .verbatim(response.instructionText)
                 speech.speak(response.instructionText)
                 if let rect = response.targetRect { overlay.model.guide(rect: rect) }
                 await api.logEvent(LogEventRequest(sessionID: sessionID, actor: "ai_guide", kind: "ai.instruction", payload: ["task": .string(taskText), "instruction": .string(response.instructionText)]))
             } catch {
-                errorMessage = "AI 指路失败：\(error.localizedDescription)"
-                guideStatus = "请稍后再试"
+                errorMessage = copy(
+                    "AI 指路失败：\(error.localizedDescription)",
+                    "AI guidance failed: \(error.localizedDescription)"
+                )
+                guideStatus = copy("请稍后再试", "Try again later")
             }
         }
     }
 
     private func failAndEnd(_ error: Error) async {
-        errorMessage = error.localizedDescription
+        errorMessage = localizedError(error)
         await endSessionNow()
     }
 
-    private func endSessionNow(statusMessage finalStatusMessage: String = "本次求助已经结束") async {
+    private func endSessionNow(
+        statusMessage finalStatusMessage: LocalizedCopy = copy(
+            "本次求助已经结束",
+            "This assistance session has ended"
+        )
+    ) async {
         guard !isEndingSession else { return }
         isEndingSession = true
         defer { isEndingSession = false }
@@ -750,5 +960,18 @@ final class AppModel: ObservableObject {
 
         // Withdrawal starts before local cleanup but never delays it.
         await broadcastWithdrawal.value
+    }
+
+    private func localizedError(_ error: Error) -> LocalizedCopy {
+        let description = error.localizedDescription
+        return .verbatim(description)
+    }
+
+    private static func englishDisplayName(for kind: ElderMediaKind) -> String {
+        switch kind {
+        case .camera: "camera"
+        case .screen: "computer screen"
+        case .microphone: "microphone"
+        }
     }
 }

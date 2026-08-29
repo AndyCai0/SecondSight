@@ -302,6 +302,10 @@ private final class PermissionPromptGuideController {
             backing: .buffered,
             defer: false
         )
+        // PermissionPromptGuideController owns this panel through a strong
+        // property and explicitly clears it after close(). Disable AppKit's
+        // legacy release-on-close path so ARC remains the sole owner.
+        panel.isReleasedWhenClosed = false
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false
@@ -580,11 +584,15 @@ final class PermissionManager: ObservableObject {
 
     @Published private(set) var statuses: [Kind: Status] = [:]
     @Published private(set) var screenRestartRequired = false
+    let requiredKinds: [Kind]
     private let screenWasAuthorizedAtLaunch: Bool
     private let promptGuide = PermissionPromptGuideController()
     private var timer: Timer?
 
-    init() {
+    init(includeAIFeatures: Bool = true) {
+        requiredKinds = includeAIFeatures
+            ? Kind.allCases
+            : [.screen, .accessibility, .microphone]
         screenWasAuthorizedAtLaunch = CGPreflightScreenCaptureAccess()
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
@@ -594,7 +602,7 @@ final class PermissionManager: ObservableObject {
 
     deinit { timer?.invalidate() }
 
-    var allGranted: Bool { Kind.allCases.allSatisfy { statuses[$0] == .authorized } }
+    var allGranted: Bool { requiredKinds.allSatisfy { statuses[$0] == .authorized } }
     var allAuthorized: Bool { allGranted && !screenRestartRequired }
 
     func refresh() {

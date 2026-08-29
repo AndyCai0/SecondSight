@@ -28,6 +28,16 @@ final class EdgeAPIClient: @unchecked Sendable {
         try await post(path: "create-session", body: EmptyRequest(), response: CreateSessionResponse.self)
     }
 
+    func setSessionBroadcast(_ request: BroadcastSessionRequest) async throws -> BroadcastSessionResponse {
+        let response = try await post(
+            path: "broadcast-session",
+            body: request,
+            response: BroadcastSessionResponse.self
+        )
+        guard response.ok else { throw ClientError.invalidResponse }
+        return response
+    }
+
     func requestGuide(_ request: AIGuideRequest) async throws -> AIGuideResponse {
         try await post(path: "ai-guide", body: request, response: AIGuideResponse.self)
     }

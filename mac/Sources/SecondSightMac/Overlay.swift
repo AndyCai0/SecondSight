@@ -163,6 +163,10 @@ final class OverlayWindowController {
     func show() {
         guard window == nil, let screen = NSScreen.main else { return }
         let window = NSWindow(contentRect: screen.frame, styleMask: .borderless, backing: .buffered, defer: false)
+        // This controller owns the window through a strong Swift reference.
+        // AppKit's default release-on-close ownership conflicts with ARC and
+        // can over-release the window when close() also clears that reference.
+        window.isReleasedWhenClosed = false
         window.isOpaque = false
         window.backgroundColor = .clear
         window.hasShadow = false

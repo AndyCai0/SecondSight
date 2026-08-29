@@ -79,3 +79,99 @@ final class SecurityLogicTests: XCTestCase {
         XCTAssertEqual(size.height, 1_045)
     }
 }
+
+final class MediaTrackContractTests: XCTestCase {
+    func testElderTrackNamesAreStableAndUnique() {
+        XCTAssertEqual(ElderMediaKind.camera.trackName, "elder-camera")
+        XCTAssertEqual(ElderMediaKind.screen.trackName, "screen-redacted")
+        XCTAssertEqual(ElderMediaKind.microphone.trackName, "elder-microphone")
+        XCTAssertEqual(Set(ElderMediaKind.allCases.map(\.trackName)).count, 3)
+    }
+}
+
+final class PermissionPromptWindowPolicyTests: XCTestCase {
+    func testExistingApplePermissionPromptCanStillBeGuided() {
+        XCTAssertTrue(
+            PermissionPromptWindowPolicy.mayUseWindow(
+                bundleIdentifier: PermissionPromptWindowPolicy.systemPromptBundleIdentifier,
+                wasVisibleBeforeRequest: true
+            )
+        )
+    }
+
+    func testUnrelatedExistingWindowIsRejected() {
+        XCTAssertFalse(
+            PermissionPromptWindowPolicy.mayUseWindow(
+                bundleIdentifier: "com.example.Unrelated",
+                wasVisibleBeforeRequest: true
+            )
+        )
+        XCTAssertTrue(
+            PermissionPromptWindowPolicy.mayUseWindow(
+                bundleIdentifier: "com.example.Unrelated",
+                wasVisibleBeforeRequest: false
+            )
+        )
+    }
+
+    func testSettingsGuideUsesDetectedSwitchFrameExactly() {
+        let settingsFrame = CGRect(x: 220, y: 80, width: 1_000, height: 800)
+        let visibleFrame = CGRect(x: 0, y: 0, width: 1_440, height: 900)
+        let appRowFrame = CGRect(x: 300, y: 360, width: 700, height: 54)
+        let switchFrame = CGRect(x: 1_115, y: 372, width: 46, height: 28)
+
+        let panelFrame = PermissionSettingsGuideLayout.panelFrame(
+            systemSettingsFrame: settingsFrame,
+            appRowFrame: appRowFrame,
+            switchFrame: switchFrame,
+            visibleScreenFrame: visibleFrame
+        )
+        let target = PermissionSettingsGuideLayout.switchTarget(
+            systemSettingsFrame: settingsFrame,
+            appRowFrame: appRowFrame,
+            switchFrame: switchFrame
+        )
+
+        XCTAssertTrue(visibleFrame.contains(panelFrame))
+        XCTAssertEqual(target, CGPoint(x: switchFrame.midX, y: switchFrame.midY))
+        XCTAssertGreaterThan(panelFrame.minY, target.y)
+        XCTAssertEqual(
+            panelFrame.maxX - PermissionSettingsGuideLayout.arrowTipTrailingInset,
+            target.x
+        )
+    }
+
+    func testSettingsGuideUsesDetectedRowWhenSwitchIsUnavailable() {
+        let settingsFrame = CGRect(x: 220, y: 80, width: 1_000, height: 800)
+        let appRowFrame = CGRect(x: 300, y: 360, width: 700, height: 54)
+
+        let target = PermissionSettingsGuideLayout.switchTarget(
+            systemSettingsFrame: settingsFrame,
+            appRowFrame: appRowFrame,
+            switchFrame: nil
+        )
+
+        XCTAssertEqual(target.y, appRowFrame.midY)
+        XCTAssertGreaterThan(target.x, appRowFrame.maxX)
+    }
+
+    func testSettingsGuideFallsBackAndIsClampedOnSmallVisibleScreen() {
+        let settingsFrame = CGRect(x: -80, y: -40, width: 700, height: 560)
+        let visibleFrame = CGRect(x: 0, y: 0, width: 600, height: 500)
+
+        let panelFrame = PermissionSettingsGuideLayout.panelFrame(
+            systemSettingsFrame: settingsFrame,
+            appRowFrame: nil,
+            switchFrame: nil,
+            visibleScreenFrame: visibleFrame
+        )
+        let target = PermissionSettingsGuideLayout.switchTarget(
+            systemSettingsFrame: settingsFrame,
+            appRowFrame: nil,
+            switchFrame: nil
+        )
+
+        XCTAssertTrue(visibleFrame.contains(panelFrame))
+        XCTAssertEqual(target.y, settingsFrame.minY + settingsFrame.height * 0.45)
+    }
+}

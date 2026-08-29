@@ -1,3 +1,5 @@
+import AppKit
+import AVFoundation
 import Combine
 import Foundation
 import LiveKit
@@ -7,12 +9,22 @@ import SecondSightCore
 final class AppModel: ObservableObject {
     @Published private(set) var phase: SessionPhase = .idle
     @Published private(set) var roomCode: String?
-    @Published var statusMessage = "需要帮助时，点下面的大按钮"
+    @Published var statusMessage = "可以呼叫在线助手，也可以使用分享码"
     @Published var errorMessage: String?
     @Published var guideStatus = "按住说话，松开后我会给您指路"
     @Published var isGuideRecording = false
+    @Published var isCameraConsentPresented = false
+    @Published private(set) var isPreparingHelp = false
+    @Published private(set) var cameraNeedsSettings = false
+    @Published private(set) var mediaRecoveryMessage: String?
+    @Published private(set) var assistanceDiscoveryMode: AssistanceDiscoveryMode?
+    @Published private(set) var notifiedAssistantCount: Int?
+    @Published private(set) var broadcastMessage: String?
 
-    let permissions = PermissionManager()
+    private static let defaultAIEnabled = false
+
+    let aiFeaturesEnabled: Bool
+    let permissions: PermissionManager
 
     private var machine = SessionStateMachine()
     private var api: EdgeAPIClient?
@@ -21,55 +33,176 @@ final class AppModel: ObservableObject {
     private lazy var capture = ScreenCaptureService(scanner: scanner)
     private let transport = LiveKitTransport()
     private let overlay = OverlayWindowController()
-    private let roomCodeWindow = RoomCodeWindowController()
     private let speech = SpeechSynthesizer()
     private let referee = RefereeSpeechService()
     private let guideSpeech = PushToTalkSpeechService()
+    private var screenCaptureFailed = false
+    private var pendingDiscoveryMode: AssistanceDiscoveryMode?
 
     init() {
+        aiFeaturesEnabled = Self.defaultAIEnabled
+        permissions = PermissionManager(includeAIFeatures: Self.defaultAIEnabled)
         do { api = EdgeAPIClient(configuration: try AppConfiguration.load()) }
         catch { errorMessage = error.localizedDescription }
         wireServices()
     }
 
-    func startHelp() {
+    func startHelp(using discoveryMode: AssistanceDiscoveryMode) {
         guard phase == .idle || phase == .ended else { return }
         guard permissions.allAuthorized else {
-            errorMessage = "请先把下面四项权限都设为“已允许”。"
+            errorMessage = "请先把下面列出的权限都设为“已允许”。"
             return
         }
+        errorMessage = nil
+        cameraNeedsSettings = false
+        pendingDiscoveryMode = discoveryMode
+        isCameraConsentPresented = true
+    }
+
+    func confirmCameraAndStartHelp() {
+        guard
+            !isPreparingHelp,
+            phase == .idle || phase == .ended,
+            let discoveryMode = pendingDiscoveryMode
+        else { return }
+        isCameraConsentPresented = false
+        isPreparingHelp = true
+        statusMessage = "正在准备摄像头……"
+        Task {
+            let granted = await requestCameraAccess()
+            guard granted else {
+                isPreparingHelp = false
+                cameraNeedsSettings = AVCaptureDevice.authorizationStatus(for: .video) == .denied
+                statusMessage = "摄像头没有打开"
+                errorMessage = cameraNeedsSettings
+                    ? "请在系统设置里允许摄像头，然后再点“求助”。"
+                    : "需要允许摄像头，才能进入视频通话。"
+                return
+            }
+            cameraNeedsSettings = false
+            await beginHelpSession(using: discoveryMode)
+            isPreparingHelp = false
+        }
+    }
+
+    func cancelCameraConsent() {
+        isCameraConsentPresented = false
+        pendingDiscoveryMode = nil
+        statusMessage = "已取消，摄像头没有打开"
+    }
+
+    func openCameraSettings() {
+        guard let url = URL(
+            string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera"
+        ) else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    func retryFailedMedia() {
+        mediaRecoveryMessage = nil
+        statusMessage = "正在重新连接摄像头和共享画面……"
+        transport.retryFailedMedia()
+        guard screenCaptureFailed else { return }
+        Task {
+            do {
+                try await capture.restart()
+                screenCaptureFailed = false
+            } catch {
+                screenCaptureFailed = true
+                mediaRecoveryMessage = "电脑画面重连失败：\(error.localizedDescription)"
+                statusMessage = "摄像头仍可继续，电脑画面需要再次重连"
+            }
+        }
+    }
+
+    private func requestCameraAccess() async -> Bool {
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized:
+            true
+        case .notDetermined:
+            await AVCaptureDevice.requestAccess(for: .video)
+        default:
+            false
+        }
+    }
+
+    private func beginHelpSession(using discoveryMode: AssistanceDiscoveryMode) async {
         if api == nil {
             do { api = EdgeAPIClient(configuration: try AppConfiguration.load()) }
             catch { errorMessage = error.localizedDescription; return }
         }
         guard let api else { return }
-        Task {
-            do {
-                if phase == .ended {
-                    _ = try machine.apply(.reset)
-                    phase = machine.phase
-                }
-                _ = try machine.apply(.requestHelp)
+        do {
+            if phase == .ended {
+                _ = try machine.apply(.reset)
                 phase = machine.phase
-                statusMessage = "正在为您联系帮助……"
-                errorMessage = nil
-                let response = try await api.createSession()
-                sessionID = response.sessionID
-                roomCode = response.code
-                _ = try machine.apply(.sessionCreated)
-                phase = machine.phase
-                statusMessage = "房间号码是 \(response.code)，正在等待对方加入"
-                overlay.show()
-                roomCodeWindow.show(code: response.code) { [weak self] in
-                    self?.endSession()
-                }
-                speech.speak("您的房间号码是，\(response.code.map(String.init).joined(separator: "，"))")
-                try await transport.connect(url: response.liveKitURL, token: response.liveKitToken)
-                try await capture.start()
-            } catch {
-                await failAndEnd(error)
             }
+            _ = try machine.apply(.requestHelp)
+            phase = machine.phase
+            statusMessage = "正在为您联系帮助……"
+            errorMessage = nil
+            mediaRecoveryMessage = nil
+            broadcastMessage = nil
+            notifiedAssistantCount = nil
+            assistanceDiscoveryMode = discoveryMode
+            screenCaptureFailed = false
+            let response = try await api.createSession()
+            sessionID = response.sessionID
+            roomCode = response.code
+            _ = try machine.apply(.sessionCreated)
+            phase = machine.phase
+            statusMessage = discoveryMode == .broadcast
+                ? "正在连接摄像头和电脑画面，随后呼叫在线助手"
+                : "房间号码是 \(response.code)，摄像头和电脑画面正在连接"
+            overlay.show()
+            try await transport.connect(url: response.liveKitURL, token: response.liveKitToken)
+            try await capture.start()
+
+            if discoveryMode == .broadcast {
+                await startAssistantBroadcast(sessionID: response.sessionID, fallbackCode: response.code)
+            } else {
+                speakShareCode(response.code)
+            }
+        } catch {
+            await failAndEnd(error)
         }
+    }
+
+    private func startAssistantBroadcast(sessionID: UUID, fallbackCode: String) async {
+        guard let api else { return }
+        statusMessage = "正在向在线助手广播求助……"
+        do {
+            let response = try await api.setSessionBroadcast(
+                BroadcastSessionRequest(sessionID: sessionID, isActive: true)
+            )
+            guard phase == .waiting else {
+                _ = try? await api.setSessionBroadcast(
+                    BroadcastSessionRequest(sessionID: sessionID, isActive: false)
+                )
+                return
+            }
+            notifiedAssistantCount = response.notifiedAssistants
+            if let count = response.notifiedAssistants {
+                statusMessage = count > 0
+                    ? "已通知 \(count) 位在线助手，正在等待一位助手响应"
+                    : "广播已经发出，目前还没有助手在线"
+            } else {
+                statusMessage = "已向在线助手广播求助，正在等待一位助手响应"
+            }
+            broadcastMessage = "第一位响应的助手会接入；您也可以把备用分享码告诉认识的人。"
+            speech.speak("求助信息已经发给在线助手，请稍等。")
+        } catch {
+            guard phase == .waiting else { return }
+            assistanceDiscoveryMode = .shareCode
+            notifiedAssistantCount = nil
+            broadcastMessage = "在线助手广播暂时不可用，房间仍然安全可用。请把下面的分享码告诉帮助您的人。"
+            statusMessage = "广播暂时不可用，请使用分享码求助"
+            speakShareCode(fallbackCode)
+        }
+    }
+
+    private func speakShareCode(_ code: String) {
+        speech.speak("您的房间号码是，\(code.map(String.init).joined(separator: "，"))")
     }
 
     func endSession() {
@@ -77,6 +210,7 @@ final class AppModel: ObservableObject {
     }
 
     func startGuideRecording() {
+        guard aiFeaturesEnabled else { return }
         guard !isGuideRecording else { return }
         guard sessionID != nil, capture.latestFrame.get() != nil else {
             errorMessage = "请先点“求助”，等画面准备好后再用 AI 帮我。"
@@ -123,7 +257,11 @@ final class AppModel: ObservableObject {
     private func wireServices() {
         capture.onFrame = { [weak transport] frame in transport?.acceptRedactedFrame(frame) }
         capture.onError = { [weak self] error in
-            Task { @MainActor in self?.errorMessage = "屏幕采集停止：\(error.localizedDescription)" }
+            Task { @MainActor in
+                self?.screenCaptureFailed = true
+                self?.mediaRecoveryMessage = "电脑画面采集停止：\(error.localizedDescription)"
+                self?.statusMessage = "摄像头仍可继续，电脑画面需要重连"
+            }
         }
         transport.onVolunteerJoined = { [weak self] identity in
             Task { @MainActor in self?.volunteerJoined(identity: identity) }
@@ -131,15 +269,44 @@ final class AppModel: ObservableObject {
         transport.onDataMessage = { [weak self] message in
             Task { @MainActor in self?.handleDataMessage(message) }
         }
-        transport.onRemoteAudioTrack = { [weak referee] track in referee?.attach(to: track) }
+        if aiFeaturesEnabled {
+            transport.onRemoteAudioTrack = { [weak referee] track in referee?.attach(to: track) }
+        }
+        transport.onMediaError = { [weak self] kind, error in
+            Task { @MainActor in
+                self?.mediaRecoveryMessage = "\(kind.displayName)连接失败：\(error.localizedDescription)"
+                self?.statusMessage = "部分画面没有连上，其他通话内容仍可继续"
+            }
+        }
+        transport.onAllMediaReady = { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                self.mediaRecoveryMessage = nil
+                if self.phase == .connected {
+                    self.statusMessage = "视频通话已连接，摄像头和电脑画面都在分享"
+                } else if self.assistanceDiscoveryMode == .broadcast {
+                    if let count = self.notifiedAssistantCount {
+                        self.statusMessage = count > 0
+                            ? "已通知 \(count) 位在线助手，正在等待一位助手响应"
+                            : "广播已经发出，目前还没有助手在线"
+                    } else {
+                        self.statusMessage = "摄像头和电脑画面已连接，正在呼叫在线助手"
+                    }
+                } else {
+                    self.statusMessage = "摄像头和电脑画面已连接，正在等待对方加入"
+                }
+            }
+        }
         transport.onError = { [weak self] error in
             Task { @MainActor in self?.errorMessage = "通话连接有问题：\(error.localizedDescription)" }
         }
-        referee.onTranscript = { [weak self] transcript in
-            Task { @MainActor in await self?.evaluateVolunteerSpeech(transcript) }
-        }
-        referee.onError = { [weak self] error in
-            Task { @MainActor in self?.errorMessage = error.localizedDescription }
+        if aiFeaturesEnabled {
+            referee.onTranscript = { [weak self] transcript in
+                Task { @MainActor in await self?.evaluateVolunteerSpeech(transcript) }
+            }
+            referee.onError = { [weak self] error in
+                Task { @MainActor in self?.errorMessage = error.localizedDescription }
+            }
         }
         overlay.model.onResume = { [weak self] in self?.resumeAfterFalsePositive() }
     }
@@ -149,9 +316,17 @@ final class AppModel: ObservableObject {
         do {
             _ = try machine.apply(.volunteerJoined)
             phase = machine.phase
-            roomCodeWindow.close()
+            broadcastMessage = nil
+            notifiedAssistantCount = nil
             statusMessage = "帮助您的人已经加入，只能看和指，不能控制您的电脑"
             speech.speak("帮助您的人已经加入。请记住，密码和验证码谁都不能告诉。")
+            if assistanceDiscoveryMode == .broadcast, let sessionID, let api {
+                Task {
+                    _ = try? await api.setSessionBroadcast(
+                        BroadcastSessionRequest(sessionID: sessionID, isActive: false)
+                    )
+                }
+            }
         } catch { errorMessage = error.localizedDescription }
     }
 
@@ -169,7 +344,7 @@ final class AppModel: ObservableObject {
     }
 
     private func evaluateVolunteerSpeech(_ transcript: String) async {
-        guard phase == .connected, let sessionID else { return }
+        guard aiFeaturesEnabled, phase == .connected, let sessionID else { return }
         do {
             guard let verdict = try await api?.classify(AIRefereeRequest(sessionID: sessionID, transcript: transcript)) else { return }
             switch verdict.verdict {
@@ -249,10 +424,10 @@ final class AppModel: ObservableObject {
     }
 
     private func endSessionNow() async {
+        let broadcastSessionID = assistanceDiscoveryMode == .broadcast ? sessionID : nil
         referee.stop()
         await capture.stop()
         await transport.disconnect()
-        roomCodeWindow.close()
         overlay.close()
         if phase != .idle, phase != .ended {
             _ = try? machine.apply(.end)
@@ -260,6 +435,18 @@ final class AppModel: ObservableObject {
         }
         roomCode = nil
         sessionID = nil
+        pendingDiscoveryMode = nil
+        assistanceDiscoveryMode = nil
+        notifiedAssistantCount = nil
+        broadcastMessage = nil
+        mediaRecoveryMessage = nil
+        screenCaptureFailed = false
         statusMessage = "本次求助已经结束"
+
+        if let broadcastSessionID, let api {
+            _ = try? await api.setSessionBroadcast(
+                BroadcastSessionRequest(sessionID: broadcastSessionID, isActive: false)
+            )
+        }
     }
 }

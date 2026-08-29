@@ -7,56 +7,80 @@ final class LiveKitTransport: NSObject, RoomDelegate, @unchecked Sendable {
     var onVolunteerJoined: (@Sendable (String) -> Void)?
     var onDataMessage: (@Sendable (DataMessage) -> Void)?
     var onRemoteAudioTrack: (@Sendable (RemoteAudioTrack) -> Void)?
+    var onMediaError: (@Sendable (ElderMediaKind, Error) -> Void)?
+    var onAllMediaReady: (@Sendable () -> Void)?
     var onError: (@Sendable (Error) -> Void)?
 
+    private static let publicationOrder: [ElderMediaKind] = [.screen, .microphone, .camera]
     private let lock = NSLock()
     private lazy var room = Room(delegate: self)
-    private let videoTrack = LocalVideoTrack.createBufferTrack(options: BufferCaptureOptions(fps: 12))
-    private lazy var audioTrack = LocalAudioTrack.createTrack()
-    private var videoPublication: LocalTrackPublication?
-    private var audioPublication: LocalTrackPublication?
+    private let screenTrack = LocalVideoTrack.createBufferTrack(
+        name: ElderMediaKind.screen.trackName,
+        source: .screenShareVideo,
+        options: BufferCaptureOptions(fps: 12)
+    )
+    private let cameraTrack = LocalVideoTrack.createCameraTrack(
+        name: ElderMediaKind.camera.trackName,
+        options: CameraCaptureOptions(dimensions: .h720_169, fps: 15)
+    )
+    private lazy var audioTrack = LocalAudioTrack.createTrack(name: ElderMediaKind.microphone.trackName)
+    private var publications: [ElderMediaKind: LocalTrackPublication] = [:]
+    private var failedMedia: Set<ElderMediaKind> = []
     private var isConnected = false
-    private var publishing = false
+    private var publishPassRunning = false
+    private var publishTask: Task<Void, Never>?
     private var mediaEnabled = true
+    private var hasScreenFrame = false
 
     func connect(url: String, token: String) async throws {
         try await room.connect(url: url, token: token)
         withState {
             isConnected = true
             mediaEnabled = true
-            publishing = false
-            videoPublication = nil
-            audioPublication = nil
+            publishPassRunning = false
+            publishTask = nil
+            publications.removeAll()
+            failedMedia.removeAll()
+            hasScreenFrame = false
         }
+        schedulePublishPass()
     }
 
     func acceptRedactedFrame(_ frame: CVPixelBuffer) {
-        guard let capturer = videoTrack.capturer as? BufferCapturer else { return }
+        guard let capturer = screenTrack.capturer as? BufferCapturer else { return }
         capturer.capture(frame)
-        let shouldPublish = withState {
-            let result = isConnected && mediaEnabled && !publishing && videoPublication == nil
-            if result { publishing = true }
-            return result
-        }
-        guard shouldPublish else { return }
-        Task { [weak self] in await self?.publishMedia() }
+        withState { hasScreenFrame = true }
+        schedulePublishPass()
     }
 
     func freezeMedia() async {
-        withState { mediaEnabled = false }
+        let task = withState {
+            mediaEnabled = false
+            return publishTask
+        }
+        task?.cancel()
+        await task?.value
         await room.localParticipant.unpublishAll()
         withState {
-            videoPublication = nil
-            audioPublication = nil
-            publishing = false
+            publications.removeAll()
+            failedMedia.removeAll()
+            publishPassRunning = false
+            publishTask = nil
+            hasScreenFrame = false
         }
     }
 
     func resumeMedia() {
         withState {
             mediaEnabled = true
-            publishing = false
+            failedMedia.removeAll()
         }
+        schedulePublishPass()
+    }
+
+    func retryFailedMedia() {
+        withState { failedMedia.removeAll() }
+        schedulePublishPass()
     }
 
     func publish(_ message: DataMessage, reliable: Bool = true) async throws {
@@ -65,25 +89,107 @@ final class LiveKitTransport: NSObject, RoomDelegate, @unchecked Sendable {
     }
 
     func disconnect() async {
-        withState { isConnected = false; mediaEnabled = false }
+        let task = withState {
+            isConnected = false
+            mediaEnabled = false
+            return publishTask
+        }
+        task?.cancel()
+        await task?.value
         await room.disconnect()
+        withState {
+            publications.removeAll()
+            failedMedia.removeAll()
+            publishPassRunning = false
+            publishTask = nil
+        }
     }
 
-    private func publishMedia() async {
-        do {
-            let video = try await room.localParticipant.publish(
-                videoTrack: videoTrack,
-                options: VideoPublishOptions(name: "screen-redacted", simulcast: false)
-            )
-            let audio = try await room.localParticipant.publish(audioTrack: audioTrack)
-            withState {
-                videoPublication = video
-                audioPublication = audio
-                publishing = false
+    private func schedulePublishPass() {
+        let shouldStart = withState {
+            guard isConnected, mediaEnabled, !publishPassRunning else { return false }
+            let hasMissingMedia = Self.publicationOrder.contains {
+                isReadyToPublish($0) && publications[$0] == nil && !failedMedia.contains($0)
             }
-        } catch {
-            withState { publishing = false }
-            onError?(error)
+            guard hasMissingMedia else { return false }
+            publishPassRunning = true
+            return true
+        }
+        guard shouldStart else { return }
+
+        let task = Task<Void, Never> { [weak self] in
+            guard let self else { return }
+            await self.publishMissingMedia()
+        }
+        withState { publishTask = task }
+    }
+
+    private func publishMissingMedia() async {
+        let kinds = withState {
+            Self.publicationOrder.filter {
+                isReadyToPublish($0) && publications[$0] == nil && !failedMedia.contains($0)
+            }
+        }
+
+        for kind in kinds {
+            guard !Task.isCancelled else { break }
+            do {
+                let publication = try await publish(kind)
+                withState { publications[kind] = publication }
+            } catch is CancellationError {
+                break
+            } catch {
+                guard !Task.isCancelled else { break }
+                let shouldReport = withState {
+                    guard isConnected, mediaEnabled else { return false }
+                    failedMedia.insert(kind)
+                    return true
+                }
+                if shouldReport { onMediaError?(kind, error) }
+            }
+        }
+
+        let allMediaReady = withState {
+            publishPassRunning = false
+            publishTask = nil
+            return Self.publicationOrder.allSatisfy { publications[$0] != nil }
+        }
+        if allMediaReady {
+            onAllMediaReady?()
+        } else {
+            schedulePublishPass()
+        }
+    }
+
+    private func isReadyToPublish(_ kind: ElderMediaKind) -> Bool {
+        kind != .screen || hasScreenFrame
+    }
+
+    private func publish(_ kind: ElderMediaKind) async throws -> LocalTrackPublication {
+        switch kind {
+        case .screen:
+            try await room.localParticipant.publish(
+                videoTrack: screenTrack,
+                options: VideoPublishOptions(
+                    name: kind.trackName,
+                    simulcast: false,
+                    degradationPreference: .maintainResolution
+                )
+            )
+        case .camera:
+            try await room.localParticipant.publish(
+                videoTrack: cameraTrack,
+                options: VideoPublishOptions(
+                    name: kind.trackName,
+                    simulcast: false,
+                    degradationPreference: .balanced
+                )
+            )
+        case .microphone:
+            try await room.localParticipant.publish(
+                audioTrack: audioTrack,
+                options: AudioPublishOptions(name: kind.trackName)
+            )
         }
     }
 

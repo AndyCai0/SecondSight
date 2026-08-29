@@ -9,6 +9,24 @@ macos_path="${contents_path}/MacOS"
 frameworks_path="${contents_path}/Frameworks"
 resources_path="${contents_path}/Resources"
 
+resolve_signing_identity() {
+  if [[ -n "${SECONDSIGHT_SIGNING_IDENTITY:-}" ]]; then
+    print -r -- "$SECONDSIGHT_SIGNING_IDENTITY"
+    return
+  fi
+
+  security find-identity -v -p codesigning \
+    | awk '/"Apple Development:/ { print $2; exit }'
+}
+
+signing_identity="$(resolve_signing_identity)"
+if [[ -z "$signing_identity" ]]; then
+  print -u2 "No Apple Development signing identity was found."
+  print -u2 "Install a development certificate or set SECONDSIGHT_SIGNING_IDENTITY to a stable code-signing identity."
+  print -u2 "Ad-hoc signing is intentionally disabled because it invalidates macOS privacy permissions after rebuilds."
+  exit 3
+fi
+
 cd "$package_dir"
 swift build -c release --product SecondSightMac
 
@@ -35,10 +53,11 @@ if ! otool -l "$macos_path/SecondSightMac" | grep -q '@executable_path/../Framew
 fi
 
 plutil -lint "$contents_path/Info.plist" "$resources_path/Config.plist"
-codesign --force --sign - --timestamp=none "$frameworks_path/LiveKitWebRTC.framework"
-codesign --force --sign - --timestamp=none "$frameworks_path/RustLiveKitUniFFI.framework"
-codesign --force --sign - --timestamp=none "$macos_path/SecondSightMac"
-codesign --force --deep --sign - --timestamp=none "$bundle_path"
+codesign --force --sign "$signing_identity" --timestamp=none "$frameworks_path/LiveKitWebRTC.framework"
+codesign --force --sign "$signing_identity" --timestamp=none "$frameworks_path/RustLiveKitUniFFI.framework"
+codesign --force --sign "$signing_identity" --timestamp=none "$macos_path/SecondSightMac"
+codesign --force --sign "$signing_identity" --timestamp=none "$bundle_path"
 codesign --verify --deep --strict --verbose=2 "$bundle_path"
 
+print -u2 "Signed with stable identity: $signing_identity"
 print "$bundle_path"

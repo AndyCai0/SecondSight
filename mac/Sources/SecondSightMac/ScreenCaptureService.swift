@@ -73,6 +73,11 @@ final class ScreenCaptureService: NSObject, SCStreamOutput, SCStreamDelegate, @u
         self.stream = nil
     }
 
+    func restart() async throws {
+        await stop()
+        try await start()
+    }
+
     func stream(_ stream: SCStream, didStopWithError error: Error) {
         onError?(error)
     }

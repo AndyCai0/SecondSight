@@ -80,7 +80,7 @@ idle → requesting(创建会话,拿6位码) → waiting(展示大字号房间�
 ```
 
 - 老人点菜单栏"求助"→ 调 `create-session` Edge Function → 得 `{code, lk_token, lk_url,
-  session_id}` → 连 LiveKit room → 全屏展示 6 位码（同时用 AVSpeechSynthesizer 读出来）。
+  session_id}` → 连 LiveKit room → 在原窗口展示 6 位码（同时用 AVSpeechSynthesizer 读出来）。
 - 志愿者加入后自动开始推屏幕轨 + 麦克风轨。
 
 ### 2.3 采集（Capture）
@@ -213,8 +213,9 @@ Edge Function（service_role）**;客户端只读需求也走 function。这样 
 
 ### 4.2 Edge Functions（Deno/TypeScript）
 
-所有 function 的 secrets:`LIVEKIT_API_KEY` `LIVEKIT_API_SECRET` `LIVEKIT_URL`
-`ANTHROPIC_API_KEY`（用 `supabase secrets set` 配置）。
+实时房间需要 `LIVEKIT_API_KEY` `LIVEKIT_API_SECRET` `LIVEKIT_URL`。
+`ANTHROPIC_API_KEY` 仅在启用 `ai-guide` / `ai-referee` 时配置；未配置时这两个
+端点返回 503，但不影响创建房间、加入房间和 LiveKit 实时音视频。
 
 1. **`create-session`** (POST, 无 body)
    → 生成不冲突 6 位码，插 sessions，签发 LiveKit token

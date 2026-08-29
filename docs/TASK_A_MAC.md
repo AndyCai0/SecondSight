@@ -16,9 +16,9 @@
 ### A1. 会话状态机 + UI
 `idle → requesting → waiting(展示房间码) → connected → frozen → ended`
 
-- 菜单栏点"求助"→ 调 `create-session`（见 CONTRACT §4.1）→ 全屏窗口大字显示
-  6 位码，同时 `AVSpeechSynthesizer` 朗读。志愿者加入（LiveKit participant
-  joined 事件）后该窗口收起。
+- 菜单栏点"求助"→ 调 `create-session`（见 CONTRACT §4.1）→ 在原窗口大字显示
+  6 位码，同时 `AVSpeechSynthesizer` 朗读，不另开房间码窗口。志愿者加入
+  （LiveKit participant joined 事件）后该号码区域收起。
 - 所有面向老人的 UI:字号 ≥ 24pt，按钮大，文案口语化中文。
 
 ### A2. 权限向导（首启动）
@@ -29,7 +29,7 @@
 - ScreenCaptureKit:主显示器，10–15 fps，输出适配 LiveKit 自定义视频轨
   （`BufferCapturer` / custom video source，喂 `CVPixelBuffer`）。
 - `SCContentFilter(display:excludingWindows:)` 排除本 App 全部窗口
-  （房间码窗、悬浮层、警告窗）。验收:志愿者视角看不到我们自己的 UI。
+  （主窗口、悬浮层、警告窗）。验收:志愿者视角看不到我们自己的 UI。
 - **这是全项目最大不确定点，最先做**:先跑通"采集→推流→LiveKit dashboard
   能看到轨道"。失败退路:WKWebView 内嵌一个最小网页用浏览器 WebRTC 采集推流
   （体验降级但通路保住），退路触发条件 = Day 1 上午结束仍未推流成功。

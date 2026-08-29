@@ -59,45 +59,74 @@ struct MenuContentView: View {
                         .background(.red.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
                 }
 
-                if model.phase == .idle || model.phase == .ended {
-                    Button(action: model.startHelp) {
-                        Label("求助", systemImage: "hand.raised.fill")
-                            .font(.system(size: 30, weight: .heavy))
-                            .frame(maxWidth: .infinity, minHeight: 64)
+                if model.cameraNeedsSettings {
+                    Button("打开摄像头设置", action: model.openCameraSettings)
+                        .font(.system(size: 24, weight: .bold))
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+                }
+
+                if let mediaIssue = model.mediaRecoveryMessage {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text(mediaIssue)
+                            .font(.system(size: 24, weight: .bold))
+                        Button("重新连接视频", action: model.retryFailedMedia)
+                            .font(.system(size: 24, weight: .bold))
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.large)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                    .disabled(!model.permissions.allAuthorized)
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.orange.opacity(0.14), in: RoundedRectangle(cornerRadius: 12))
+                }
+
+                if model.phase == .idle || model.phase == .ended {
+                    HelpRequestChoices(model: model)
                 } else {
                     if let code = model.roomCode, model.phase == .waiting {
-                        Text("房间号码：\(code)")
-                            .font(.system(size: 32, weight: .heavy, design: .rounded))
-                            .monospacedDigit()
+                        RoomCodeView(
+                            code: code,
+                            discoveryMode: model.assistanceDiscoveryMode ?? .shareCode,
+                            notifiedAssistantCount: model.notifiedAssistantCount
+                        )
                     }
 
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("AI 帮我")
-                            .font(.system(size: 26, weight: .bold))
-                        Text(model.guideStatus)
-                            .font(.system(size: 24))
-                        Text(model.isGuideRecording ? "松开就发送" : "按住说话")
-                            .font(.system(size: 26, weight: .bold))
-                            .frame(maxWidth: .infinity, minHeight: 58)
-                            .foregroundStyle(.white)
-                            .background(model.isGuideRecording ? Color.red : Color.blue, in: RoundedRectangle(cornerRadius: 16))
-                            .contentShape(Rectangle())
-                            .gesture(
-                                DragGesture(minimumDistance: 0)
-                                    .onChanged { _ in
-                                        guard !pressingGuide else { return }
-                                        pressingGuide = true
-                                        model.startGuideRecording()
-                                    }
-                                    .onEnded { _ in
-                                        pressingGuide = false
-                                        model.stopGuideRecording()
-                                    }
+                    if let broadcastMessage = model.broadcastMessage {
+                        Text(broadcastMessage)
+                            .font(.system(size: 21, weight: .semibold))
+                            .padding(14)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(
+                                (model.assistanceDiscoveryMode == .broadcast ? Color.blue : Color.orange).opacity(0.14),
+                                in: RoundedRectangle(cornerRadius: 12)
                             )
+                    }
+
+                    if model.aiFeaturesEnabled {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("AI 帮我")
+                                .font(.system(size: 26, weight: .bold))
+                            Text(model.guideStatus)
+                                .font(.system(size: 24))
+                            Text(model.isGuideRecording ? "松开就发送" : "按住说话")
+                                .font(.system(size: 26, weight: .bold))
+                                .frame(maxWidth: .infinity, minHeight: 58)
+                                .foregroundStyle(.white)
+                                .background(model.isGuideRecording ? Color.red : Color.blue, in: RoundedRectangle(cornerRadius: 16))
+                                .contentShape(Rectangle())
+                                .gesture(
+                                    DragGesture(minimumDistance: 0)
+                                        .onChanged { _ in
+                                            guard !pressingGuide else { return }
+                                            pressingGuide = true
+                                            model.startGuideRecording()
+                                        }
+                                        .onEnded { _ in
+                                            pressingGuide = false
+                                            model.stopGuideRecording()
+                                        }
+                                )
+                        }
                     }
 
                     Button(role: .destructive, action: model.endSession) {
@@ -118,6 +147,12 @@ struct MenuContentView: View {
             .frame(maxWidth: .infinity, alignment: .center)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .alert("即将打开摄像头", isPresented: $model.isCameraConsentPresented) {
+            Button("取消", role: .cancel, action: model.cancelCameraConsent)
+            Button("确认并进入视频通话", action: model.confirmCameraAndStartHelp)
+        } message: {
+            Text("帮助您的人会同时看到您的摄像头画面和已经遮蔽敏感信息的电脑画面。您可以随时结束求助。")
+        }
     }
 }
 
@@ -126,11 +161,11 @@ struct PermissionChecklist: View {
     @State private var startedKinds: Set<PermissionManager.Kind> = []
 
     private var completedCount: Int {
-        PermissionManager.Kind.allCases.filter { manager.statuses[$0] == .authorized }.count
+        manager.requiredKinds.filter { manager.statuses[$0] == .authorized }.count
     }
 
     private var currentKind: PermissionManager.Kind? {
-        PermissionManager.Kind.allCases.first { manager.statuses[$0] != .authorized }
+        manager.requiredKinds.first { manager.statuses[$0] != .authorized }
     }
 
     var body: some View {
@@ -139,12 +174,12 @@ struct PermissionChecklist: View {
                 Text("第一次使用，跟着步骤设置")
                     .font(.system(size: 24, weight: .bold))
                 Spacer()
-                Text("已完成 \(completedCount) / 4")
+                Text("已完成 \(completedCount) / \(manager.requiredKinds.count)")
                     .font(.system(size: 20, weight: .bold))
                     .foregroundStyle(.secondary)
             }
 
-            ForEach(PermissionManager.Kind.allCases) { kind in
+            ForEach(manager.requiredKinds) { kind in
                 if manager.statuses[kind] == .authorized {
                     completedRow(kind)
                 } else if kind == currentKind {
@@ -179,7 +214,7 @@ struct PermissionChecklist: View {
 
     @ViewBuilder
     private func activeStep(_ kind: PermissionManager.Kind) -> some View {
-        let stepNumber = (PermissionManager.Kind.allCases.firstIndex(of: kind) ?? 0) + 1
+        let stepNumber = (manager.requiredKinds.firstIndex(of: kind) ?? 0) + 1
         let hasStarted = startedKinds.contains(kind)
 
         VStack(alignment: .leading, spacing: 12) {

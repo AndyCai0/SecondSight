@@ -28,6 +28,8 @@
     <true/>
     <key>NSMicrophoneUsageDescription</key>
     <string>用于在求助通话和“AI 帮我”时听清您的语音。</string>
+    <key>NSCameraUsageDescription</key>
+    <string>仅在您确认后打开摄像头，让帮助您的人在求助期间看到您。</string>
     <key>NSSpeechRecognitionUsageDescription</key>
     <string>用于在本机把中文语音转成文字，提供安全检查和操作指引。</string>
     <key>NSScreenCaptureUsageDescription</key>

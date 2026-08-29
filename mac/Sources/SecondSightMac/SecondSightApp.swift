@@ -13,18 +13,13 @@ struct SecondSightApp: App {
                     NSApp.activate(ignoringOtherApps: true)
                 }
         }
-        .defaultSize(width: 520, height: 690)
+        .defaultSize(width: 520, height: 760)
         .windowResizability(.contentSize)
 
         MenuBarExtra("第二双眼睛", systemImage: "eye.circle.fill") {
             MenuContentView(model: model)
         }
         .menuBarExtraStyle(.window)
-
-        Settings {
-            PermissionGuideView(manager: model.permissions)
-                .frame(minWidth: 620, minHeight: 520)
-        }
     }
 }
 
@@ -51,12 +46,6 @@ struct MenuContentView: View {
 
                 if !model.permissions.allAuthorized {
                     PermissionChecklist(manager: model.permissions)
-                    SettingsLink {
-                        Label("打开完整权限向导", systemImage: "gearshape.fill")
-                            .font(.system(size: 24, weight: .bold))
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.large)
                 }
 
                 if let error = model.errorMessage {
@@ -116,72 +105,148 @@ struct MenuContentView: View {
                     }
                     .buttonStyle(.bordered)
                 }
+
+                Color.clear
+                    .frame(height: 44)
+                    .accessibilityHidden(true)
             }
-            .padding(26)
+            .padding(.horizontal, 26)
+            .padding(.top, 26)
         }
-        .frame(width: 520, height: 690)
+        .frame(width: 520, height: 760)
     }
 }
 
 struct PermissionChecklist: View {
     @ObservedObject var manager: PermissionManager
+    @State private var startedKinds: Set<PermissionManager.Kind> = []
+
+    private var completedCount: Int {
+        PermissionManager.Kind.allCases.filter { manager.statuses[$0] == .authorized }.count
+    }
+
+    private var currentKind: PermissionManager.Kind? {
+        PermissionManager.Kind.allCases.first { manager.statuses[$0] != .authorized }
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("第一次使用，请先允许这四项")
-                .font(.system(size: 24, weight: .bold))
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("第一次使用，跟着步骤设置")
+                    .font(.system(size: 24, weight: .bold))
+                Spacer()
+                Text("已完成 \(completedCount) / 4")
+                    .font(.system(size: 20, weight: .bold))
+                    .foregroundStyle(.secondary)
+            }
+
             ForEach(PermissionManager.Kind.allCases) { kind in
-                HStack {
-                    Image(systemName: manager.statuses[kind] == .authorized ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
-                        .foregroundStyle(manager.statuses[kind] == .authorized ? .green : .orange)
-                    Text(kind.rawValue).font(.system(size: 24, weight: .semibold))
-                    Spacer()
-                    Text(manager.statuses[kind]?.label ?? "检查中").font(.system(size: 24))
+                if manager.statuses[kind] == .authorized {
+                    completedRow(kind)
+                } else if kind == currentKind {
+                    activeStep(kind)
+                } else {
+                    pendingRow(kind)
                 }
             }
-            Text("屏幕录制允许后，请退出并重新打开 App。")
-                .font(.system(size: 24, weight: .semibold))
-                .foregroundStyle(.orange)
+
+            if manager.allGranted && manager.screenRestartRequired {
+                VStack(alignment: .leading, spacing: 12) {
+                    Label("四项都完成了！", systemImage: "checkmark.circle.fill")
+                        .font(.system(size: 26, weight: .heavy))
+                        .foregroundStyle(.green)
+                    Text("最后需要重新打开一次，屏幕录制才会生效。")
+                        .font(.system(size: 24, weight: .semibold))
+                    Button("重新打开第二双眼睛") {
+                        manager.restartApplication()
+                    }
+                    .font(.system(size: 24, weight: .bold))
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .frame(maxWidth: .infinity)
+                }
+                .padding(16)
+                .background(.green.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+            }
         }
         .padding(16)
         .background(.quaternary, in: RoundedRectangle(cornerRadius: 14))
     }
-}
 
-struct PermissionGuideView: View {
-    @ObservedObject var manager: PermissionManager
+    @ViewBuilder
+    private func activeStep(_ kind: PermissionManager.Kind) -> some View {
+        let stepNumber = (PermissionManager.Kind.allCases.firstIndex(of: kind) ?? 0) + 1
+        let hasStarted = startedKinds.contains(kind)
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 22) {
-            Text("权限向导")
-                .font(.system(size: 34, weight: .heavy))
-            Text("按顺序完成。每一项都只用于屏幕保护、通话和语音指路。")
-                .font(.system(size: 24))
-            ForEach(PermissionManager.Kind.allCases) { kind in
-                HStack(spacing: 16) {
-                    Image(systemName: manager.statuses[kind] == .authorized ? "checkmark.circle.fill" : "circle")
-                        .font(.system(size: 30))
-                        .foregroundStyle(manager.statuses[kind] == .authorized ? .green : .secondary)
-                    VStack(alignment: .leading) {
-                        Text(kind.rawValue).font(.system(size: 24, weight: .bold))
-                        Text(manager.statuses[kind]?.label ?? "检查中").font(.system(size: 24))
-                    }
-                    Spacer()
-                    if manager.statuses[kind] != .authorized {
-                        Button("请求允许") { manager.request(kind) }
-                            .font(.system(size: 24, weight: .bold))
-                            .controlSize(.large)
-                        Button("打开系统设置") { manager.openSettings(kind) }
-                            .font(.system(size: 24, weight: .bold))
-                            .controlSize(.large)
-                    }
-                }
-                .padding(.vertical, 8)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("第 \(stepNumber) 步")
+                    .font(.system(size: 20, weight: .heavy))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 5)
+                    .background(.blue, in: Capsule())
+                Text(kind.rawValue)
+                    .font(.system(size: 26, weight: .heavy))
+                Spacer()
+                Text("现在设置")
+                    .font(.system(size: 20, weight: .bold))
+                    .foregroundStyle(.blue)
             }
-            Text("注意：屏幕录制允许后必须重新启动 App，系统才会真正生效。")
-                .font(.system(size: 24, weight: .bold))
-                .foregroundStyle(.orange)
+
+            if hasStarted {
+                Text("在系统设置里找到“SecondSightMac”，把右边的开关打开。打开后，本页会自动进入下一步。")
+                    .font(.system(size: 23, weight: .semibold))
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("打开“\(kind.rawValue)”系统设置") {
+                    manager.openSettings(kind)
+                }
+                .buttonStyle(.borderedProminent)
+            } else {
+                Text("先点下面的蓝色按钮。系统询问时，请点“允许”。")
+                    .font(.system(size: 23, weight: .semibold))
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("开始设置\(kind.rawValue)") {
+                    startedKinds.insert(kind)
+                    manager.request(kind)
+                }
+                .buttonStyle(.borderedProminent)
+            }
         }
-        .padding(32)
+        .font(.system(size: 24, weight: .bold))
+        .controlSize(.large)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(.blue.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func completedRow(_ kind: PermissionManager.Kind) -> some View {
+        HStack {
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+            Text(kind.rawValue)
+                .font(.system(size: 24, weight: .semibold))
+            Spacer()
+            Text("已完成")
+                .font(.system(size: 22, weight: .bold))
+                .foregroundStyle(.green)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+    }
+
+    private func pendingRow(_ kind: PermissionManager.Kind) -> some View {
+        HStack {
+            Image(systemName: "circle")
+                .foregroundStyle(.secondary)
+            Text(kind.rawValue)
+                .font(.system(size: 24, weight: .semibold))
+            Spacer()
+            Text("稍后设置")
+                .font(.system(size: 22))
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
     }
 }

@@ -45,7 +45,7 @@ cp Config.template.plist Config.plist
 ## 模块与 TASK A 对应关系
 
 - A1：`AppModel` + `SecondSightApp` 的 `idle → requesting → waiting → connected → frozen → ended` 状态机；SwiftUI 菜单栏、全屏 6 位房间码和中文 TTS。
-- A2：`PermissionManager` + `PermissionGuideView` 实时检查屏幕录制、辅助功能、麦克风、语音识别，并跳转对应系统设置。
+- A2：`PermissionManager` + 主页权限卡片实时检查屏幕录制、辅助功能、麦克风、语音识别，并可直接请求授权或跳转对应系统设置。
 - A3：`ScreenCaptureService` 用 ScreenCaptureKit 采主显示器 12fps，按 bundle id 排除本 App 窗口；`LiveKitTransport` 使用 `BufferCapturer` 发布自定义屏幕轨和麦克风轨。
 - A4：`AccessibilityScanner` 5Hz 扫描 secure text field/敏感标题；`FrameRedactor` 先复制帧，再按 Retina 比例覆盖黑块；Secure Event Input 无定位矩形时整屏替换为安全占位图。
 - A5：`OverlayWindowController` 是必要的薄 AppKit 窗口桥接，内容由 SwiftUI `OverlayView` 渲染圆圈、箭头、pointer、TTL 和 clear。`DataMessageCodec` 在解析边界拒绝 `volunteer:*` 的全部 `control.*`。
@@ -54,7 +54,7 @@ cp Config.template.plist Config.plist
 
 ## 首次运行与人工验收
 
-1. 从菜单栏打开“第二双眼睛”，按权限向导依次授权。屏幕录制授权后退出并重新打开 App。
+1. 打开“第二双眼睛”，在主页权限卡片中依次授权。屏幕录制授权后退出并重新打开 App。
 2. 填好真实公开配置，点“求助”，确认全屏出现 6 位码且会朗读。
 3. 志愿者加入后确认房间码窗口自动收起，LiveKit dashboard/志愿者页面出现 `screen-redacted` 和麦克风轨。
 4. Safari 打开登录页，聚焦密码框；从志愿者视角确认对应区域在 300ms 内变黑。对 AX 无法定位但启用 Secure Event Input 的页面，应看到整屏安全占位图。

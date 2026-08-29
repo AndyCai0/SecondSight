@@ -41,9 +41,12 @@ final class PermissionManager: ObservableObject {
     }
 
     @Published private(set) var statuses: [Kind: Status] = [:]
+    @Published private(set) var screenRestartRequired = false
+    private let screenWasAuthorizedAtLaunch: Bool
     private var timer: Timer?
 
     init() {
+        screenWasAuthorizedAtLaunch = CGPreflightScreenCaptureAccess()
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
@@ -52,10 +55,15 @@ final class PermissionManager: ObservableObject {
 
     deinit { timer?.invalidate() }
 
-    var allAuthorized: Bool { Kind.allCases.allSatisfy { statuses[$0] == .authorized } }
+    var allGranted: Bool { Kind.allCases.allSatisfy { statuses[$0] == .authorized } }
+    var allAuthorized: Bool { allGranted && !screenRestartRequired }
 
     func refresh() {
-        statuses[.screen] = CGPreflightScreenCaptureAccess() ? .authorized : .denied
+        let screenIsAuthorized = CGPreflightScreenCaptureAccess()
+        statuses[.screen] = screenIsAuthorized ? .authorized : .denied
+        if screenIsAuthorized && !screenWasAuthorizedAtLaunch {
+            screenRestartRequired = true
+        }
         statuses[.accessibility] = AXIsProcessTrusted() ? .authorized : .denied
         statuses[.microphone] = Self.status(AVCaptureDevice.authorizationStatus(for: .audio))
         switch SFSpeechRecognizer.authorizationStatus() {
@@ -89,6 +97,14 @@ final class PermissionManager: ObservableObject {
     func openSettings(_ kind: Kind) {
         guard let url = kind.systemSettingsURL else { return }
         NSWorkspace.shared.open(url)
+    }
+
+    func restartApplication() {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        process.arguments = ["-n", Bundle.main.bundleURL.path]
+        try? process.run()
+        NSApp.terminate(nil)
     }
 
     private static func status(_ status: AVAuthorizationStatus) -> Status {

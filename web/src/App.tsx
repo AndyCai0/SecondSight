@@ -9,8 +9,11 @@ import {
 } from './api'
 import type { SafetyRiskMessage, VolunteerOutboundMessage } from './contracts'
 import {
+  acquireVolunteerMedia,
   connectVolunteerSession,
+  type AcquireVolunteerMedia,
   type ConnectVolunteerSession,
+  type PreparedVolunteerMedia,
   type VolunteerSession,
 } from './transport'
 import './App.css'
@@ -26,10 +29,15 @@ type ReceiverStatus = 'connecting' | 'receiving' | 'reconnecting' | 'unavailable
 
 interface AppProps {
   api?: SecondSightApi
+  acquireMedia?: AcquireVolunteerMedia
   connectSession?: ConnectVolunteerSession
 }
 
-function App({ api, connectSession = connectVolunteerSession }: AppProps) {
+function App({
+  api,
+  acquireMedia = acquireVolunteerMedia,
+  connectSession = connectVolunteerSession,
+}: AppProps) {
   const environment = import.meta.env
   const configuredApi = useMemo(() => api ?? createSecondSightApi({
     supabaseUrl: environment.VITE_SUPABASE_URL ?? '',
@@ -56,8 +64,10 @@ function App({ api, connectSession = connectVolunteerSession }: AppProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const cameraRef = useRef<HTMLVideoElement>(null)
   const audioRef = useRef<HTMLAudioElement>(null)
+  const localCameraRef = useRef<HTMLVideoElement>(null)
   const currentSession = useRef<VolunteerSession | null>(null)
   const manualDisconnect = useRef(false)
+  const entryInFlight = useRef(false)
   const nameRef = useRef(name)
   const assistantId = useMemo(() => resolveAssistantId(), [])
 
@@ -96,18 +106,25 @@ function App({ api, connectSession = connectVolunteerSession }: AppProps) {
   }, [active, assistantId, broadcastConfigured, configuredApi])
 
   useEffect(() => {
-    if (active && videoRef.current && cameraRef.current && audioRef.current) {
+    if (
+      active && videoRef.current && cameraRef.current && audioRef.current &&
+      localCameraRef.current
+    ) {
       active.live.attachMedia(videoRef.current, cameraRef.current, audioRef.current)
+      active.live.attachLocalCamera(localCameraRef.current)
     }
   }, [active])
 
   useEffect(() => () => {
     manualDisconnect.current = true
-    void currentSession.current?.disconnect()
+    const session = currentSession.current
+    currentSession.current = null
+    void session?.disconnect().catch(() => undefined)
   }, [])
 
   async function handleJoin(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault()
+    if (entryInFlight.current) return
     setError('')
     if (!/^\d{6}$/.test(code)) {
       setError('Enter the 6-digit room code.')
@@ -122,47 +139,59 @@ function App({ api, connectSession = connectVolunteerSession }: AppProps) {
       return
     }
 
+    entryInFlight.current = true
     setJoining(true)
     setHasScreenMedia(false)
     setHasCameraMedia(false)
     setAuditFailed(false)
     setSafetyRisk(null)
     manualDisconnect.current = false
+    let media: PreparedVolunteerMedia | null = null
     try {
+      media = await acquireMedia()
       const joined = await configuredApi.joinSession({ code, name: name.trim() })
-      await activateSession(joined, `Room ${code}`, name.trim())
+      await activateSession(joined, `Room ${code}`, name.trim(), media)
+      media = null
     } catch (cause) {
+      media?.stop()
       setError(joinFailureMessage(cause))
     } finally {
+      entryInFlight.current = false
       setJoining(false)
     }
   }
 
   async function claimBroadcast(broadcast: HelpBroadcast): Promise<void> {
+    if (entryInFlight.current) return
     const volunteerName = name.trim()
     setError('')
     if (!volunteerName) {
       setError('Enter your display name before responding to a request.')
       return
     }
-    if (claimingSessionId) return
 
+    entryInFlight.current = true
     setClaimingSessionId(broadcast.sessionId)
     setHasScreenMedia(false)
     setHasCameraMedia(false)
     setAuditFailed(false)
     setSafetyRisk(null)
     manualDisconnect.current = false
+    let media: PreparedVolunteerMedia | null = null
     try {
+      media = await acquireMedia()
       const joined = await configuredApi.claimBroadcast({
         sessionId: broadcast.sessionId,
         assistantId,
         name: volunteerName,
       })
-      await activateSession(joined, 'Live help request', volunteerName)
+      await activateSession(joined, 'Live help request', volunteerName, media)
+      media = null
     } catch (cause) {
+      media?.stop()
       setError(claimFailureMessage(cause))
     } finally {
+      entryInFlight.current = false
       setClaimingSessionId(null)
     }
   }
@@ -171,6 +200,7 @@ function App({ api, connectSession = connectVolunteerSession }: AppProps) {
     joined: JoinedSession,
     contextLabel: string,
     volunteerName: string,
+    media: PreparedVolunteerMedia,
   ): Promise<void> {
     const live = await connectSession(joined, {
       onFreeze: (reason) => setFrozenReason(reason),
@@ -186,7 +216,7 @@ function App({ api, connectSession = connectVolunteerSession }: AppProps) {
         if (kind === 'camera') setHasCameraMedia(isAvailable)
       },
       onRisk: setSafetyRisk,
-    })
+    }, media)
     currentSession.current = live
     setActive({ joined, live, contextLabel, volunteerName })
   }
@@ -194,13 +224,22 @@ function App({ api, connectSession = connectVolunteerSession }: AppProps) {
   async function leaveSession(): Promise<void> {
     if (!active) return
     manualDisconnect.current = true
-    await active.live.disconnect()
-    currentSession.current = null
-    setActive(null)
-    setFrozenReason(null)
-    setHasScreenMedia(false)
-    setHasCameraMedia(false)
-    setSafetyRisk(null)
+    let disconnectFailed = false
+    try {
+      await active.live.disconnect()
+    } catch {
+      disconnectFailed = true
+    } finally {
+      currentSession.current = null
+      setActive(null)
+      setFrozenReason(null)
+      setHasScreenMedia(false)
+      setHasCameraMedia(false)
+      setSafetyRisk(null)
+    }
+    if (disconnectFailed) {
+      setError('Assistance ended and your camera and microphone were stopped, but the connection did not close cleanly.')
+    }
   }
 
   function audit(message: VolunteerOutboundMessage): void {
@@ -266,14 +305,14 @@ function App({ api, connectSession = connectVolunteerSession }: AppProps) {
                 {broadcasts.map((broadcast) => (
                   <article className="broadcast-card" key={broadcast.sessionId}>
                     <div>
-                      <strong>{broadcast.elderLabel} is waiting for help</strong>
+                      <strong>{displayElderLabel(broadcast.elderLabel)} is waiting for help</strong>
                       <time dateTime={broadcast.requestedAt}>
                         {formatBroadcastTime(broadcast.requestedAt)}
                       </time>
                     </div>
                     <button
                       type="button"
-                      disabled={claimingSessionId !== null}
+                      disabled={joining || claimingSessionId !== null}
                       onClick={() => void claimBroadcast(broadcast)}
                     >
                       {claimingSessionId === broadcast.sessionId ? 'Responding…' : 'Respond'}
@@ -304,11 +343,18 @@ function App({ api, connectSession = connectVolunteerSession }: AppProps) {
                 placeholder="e.g. Alex"
               />
               {error && <p className="form-error" id="join-error" role="alert">{error}</p>}
-              <button className="primary-button" type="submit" disabled={joining}>
+              <button
+                className="primary-button"
+                type="submit"
+                disabled={joining || claimingSessionId !== null}
+              >
                 {joining ? 'Connecting securely…' : 'Join Assistance Session'}
               </button>
             </form>
-            <p className="microphone-note">Your browser will request camera and microphone access after you join so you can speak with the elder.</p>
+            <p className="media-permission-note">
+              Your browser asks for camera and microphone access only after you choose to join or respond.
+              Both are required for live assistance.
+            </p>
           </section>
         </main>
       ) : (
@@ -332,6 +378,20 @@ function App({ api, connectSession = connectVolunteerSession }: AppProps) {
               <button className="leave-button" type="button" onClick={() => void leaveSession()}>
                 End Assistance
               </button>
+            </div>
+          </section>
+
+          <section className="volunteer-camera-card" aria-label="Volunteer camera status">
+            <video
+              ref={localCameraRef}
+              aria-label="Your camera preview"
+              autoPlay
+              playsInline
+              muted
+            />
+            <div>
+              <strong><i aria-hidden="true" /> Camera is on</strong>
+              <small>It turns off automatically when assistance ends</small>
             </div>
           </section>
 
@@ -473,6 +533,13 @@ function formatBroadcastTime(value: string): string {
     minute: '2-digit',
     second: '2-digit',
   }).format(date)}`
+}
+
+function displayElderLabel(value: string): string {
+  const label = value.trim()
+  const isKnownDefault = label.length === 2 &&
+    label.codePointAt(0) === 0x957f && label.codePointAt(1) === 0x8f88
+  return !label || isKnownDefault ? 'The elder' : label
 }
 
 export default App

@@ -50,10 +50,12 @@
 
 React + Vite + TypeScript + `livekit-client`。单页，无路由，桌面浏览器即可。
 
-- **加入页**:6 位码输入 + 昵称 → POST join-session → 错误码给人话提示。
+- **加入页**:6 位码输入 + 昵称；仅在志愿者主动点击加入/响应后请求摄像头和麦克风，
+  两条轨道成功取得后才 POST join-session/claim-broadcast，避免权限拒绝占用求助；
+  错误码给人话提示。
 - **会话页**:
-  - 订阅 elder 的视频轨渲染 `<video>`（保持宽高比，letterbox）+ 音频轨播放;
-    发布自己的麦克风。
+  - 分别订阅 elder 的脱敏屏幕、摄像头视频轨（保持宽高比）+ 音频轨；发布志愿者
+    已取得的摄像头和麦克风轨并显示本地预览。连接失败或退出时停止本地轨道。
   - video 上覆盖同尺寸 `<canvas>`:点击 → `annotate.circle`;拖拽 →
     `annotate.arrow`;按住移动 → `pointer`（30ms 节流，LOSSY）;
     工具栏:圈/箭头/激光笔/清除。**坐标归一化到 0–1 相对视频帧**

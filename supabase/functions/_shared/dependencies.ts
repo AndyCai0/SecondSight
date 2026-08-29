@@ -1,5 +1,5 @@
 import { createClient } from 'npm:@supabase/supabase-js@2.112.4'
-import { AccessToken, TrackSource } from 'npm:livekit-server-sdk@2.18.0'
+import { AccessToken, TokenVerifier, TrackSource } from 'npm:livekit-server-sdk@2.18.0'
 import postgres from 'npm:postgres@3.4.3'
 import {
   AIUnavailableError,
@@ -19,6 +19,7 @@ export interface ProductionConfig {
   liveKitApiSecret: string
   liveKitUrl: string
   anthropicApiKey?: string
+  assemblyAIApiKey?: string
 }
 
 type EnvironmentReader = (name: string) => string | undefined
@@ -44,6 +45,7 @@ export function readProductionConfig(
       anthropicApiKey: optionalEnvironment(readEnvironment, 'AI_ENABLED') === 'true'
         ? optionalEnvironment(readEnvironment, 'ANTHROPIC_API_KEY')
         : undefined,
+      assemblyAIApiKey: optionalEnvironment(readEnvironment, 'ASSEMBLYAI_API_KEY'),
     }
   } catch {
     throw new ServerOperationError('SERVER_CONFIGURATION_ERROR')
@@ -70,6 +72,13 @@ export function createProductionDependencies(
   const ai = config.anthropicApiKey
     ? createAnthropicClient(config.anthropicApiKey, fetcher)
     : createUnavailableAIClient()
+  const assemblyAI = config.assemblyAIApiKey
+    ? createAssemblyAIClient(config.assemblyAIApiKey, fetcher)
+    : createUnavailableAssemblyAIClient()
+  const elderCredentials = createLiveKitElderCredentialVerifier(
+    config.liveKitApiKey,
+    config.liveKitApiSecret,
+  )
 
   return {
     sessions: {
@@ -120,6 +129,15 @@ export function createProductionDependencies(
           .eq('code', code)
           .maybeSingle()
         if (error) throw databaseOperationError(error)
+        return data as SessionRecord | null
+      },
+      async findById(sessionId) {
+        const { data, error } = await database
+          .from('sessions')
+          .select('id, code, status')
+          .eq('id', sessionId)
+          .maybeSingle()
+        if (error) throw new Error('Unable to find session')
         return data as SessionRecord | null
       },
       async activate(sessionId, volunteerName) {
@@ -192,6 +210,13 @@ export function createProductionDependencies(
           payload: input.payload,
         })
         if (error) throw databaseOperationError(error)
+        if (input.kind === 'safety.risk') {
+          console.info('[safety-risk]', {
+            session_id: input.sessionId,
+            level: input.payload.level,
+            matched_rules: input.payload.matched_rules,
+          })
+        }
       },
     },
     alerts: {
@@ -463,10 +488,30 @@ export function createProductionDependencies(
         }
       },
     },
+    elderCredentials,
+    assemblyAI,
     ai,
     publicLiveKitUrl: config.liveKitUrl,
     makeCode: randomSixDigitCode,
     now: () => new Date(),
+  }
+}
+
+export function createLiveKitElderCredentialVerifier(apiKey: string, apiSecret: string) {
+  const verifier = new TokenVerifier(apiKey, apiSecret)
+  return {
+    async verify(token: string) {
+      const claims = await verifier.verify(token)
+      const identity = claims.sub
+      const room = claims.video?.room
+      if (
+        typeof identity !== 'string' || identity.length === 0 ||
+        claims.video?.roomJoin !== true || typeof room !== 'string' || room.length === 0
+      ) {
+        throw new Error('LiveKit credential is missing a room-join grant')
+      }
+      return { identity, room }
+    },
   }
 }
 
@@ -483,6 +528,46 @@ export function createSupabaseServiceFetcher(
     headers.delete('authorization')
     return fetcher(input, { ...init, headers })
   }) as Fetcher
+}
+
+export function createAssemblyAIClient(apiKey: string, fetcher: Fetcher = fetch) {
+  return {
+    async createStreamingToken(input: {
+      expiresInSeconds: number
+      maxSessionDurationSeconds: number
+    }) {
+      const query = new URLSearchParams({
+        expires_in_seconds: String(input.expiresInSeconds),
+        max_session_duration_seconds: String(input.maxSessionDurationSeconds),
+      })
+      const response = await fetcher(`https://streaming.assemblyai.com/v3/token?${query}`, {
+        method: 'GET',
+        headers: { authorization: apiKey },
+      })
+      if (!response.ok) {
+        throw new Error(`Streaming credential provider failed with status ${response.status}`)
+      }
+      const body: unknown = await response.json()
+      if (
+        !isRecord(body) || typeof body.token !== 'string' || body.token.trim().length === 0 ||
+        typeof body.expires_in_seconds !== 'number' || !Number.isFinite(body.expires_in_seconds)
+      ) {
+        throw new Error('Streaming credential provider returned invalid output')
+      }
+      return {
+        token: body.token,
+        expiresInSeconds: body.expires_in_seconds,
+      }
+    },
+  }
+}
+
+function createUnavailableAssemblyAIClient(): EdgeDependencies['assemblyAI'] {
+  return {
+    async createStreamingToken() {
+      throw new ServerOperationError('SERVER_CONFIGURATION_ERROR')
+    },
+  }
 }
 
 export async function collectAllAlerts(loadPage: AlertPageLoader): Promise<AlertRecord[]> {

@@ -11,6 +11,8 @@ Deno.test('all deployable Edge Function modules export a fetch handler', async (
     import('../functions/broadcast-session/index.ts'),
     import('../functions/assistant-poll/index.ts'),
     import('../functions/claim-broadcast/index.ts'),
+    import('../functions/assemblyai-token/index.ts'),
+    import('../functions/risk-event/index.ts'),
   ])
 
   for (const module of modules) {

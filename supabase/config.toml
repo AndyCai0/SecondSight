@@ -26,3 +26,9 @@ verify_jwt = true
 
 [functions.claim-broadcast]
 verify_jwt = true
+
+[functions.assemblyai-token]
+verify_jwt = true
+
+[functions.risk-event]
+verify_jwt = true

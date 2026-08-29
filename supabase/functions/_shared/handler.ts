@@ -28,10 +28,16 @@ export interface TokenGrant {
   canPublishSources?: readonly ('microphone' | 'camera')[]
 }
 
+export interface ElderCredentialGrant {
+  identity: string
+  room: string
+}
+
 export interface EdgeDependencies {
   sessions: {
     create(code: string): Promise<SessionRecord>
     findByCode(code: string): Promise<SessionRecord | null>
+    findById(sessionId: string): Promise<SessionRecord | null>
     activate(sessionId: string, volunteerName: string): Promise<boolean>
     freeze(sessionId: string): Promise<void>
   }
@@ -65,6 +71,18 @@ export interface EdgeDependencies {
   tokens: {
     sign(grant: TokenGrant): Promise<string>
   }
+  elderCredentials: {
+    verify(token: string): Promise<ElderCredentialGrant>
+  }
+  assemblyAI: {
+    createStreamingToken(input: {
+      expiresInSeconds: number
+      maxSessionDurationSeconds: number
+    }): Promise<{
+      token: string
+      expiresInSeconds: number
+    }>
+  }
   ai: {
     guide(input: {
       task: string
@@ -95,6 +113,8 @@ export type EdgeFunctionName =
   | 'broadcast-session'
   | 'assistant-poll'
   | 'claim-broadcast'
+  | 'assemblyai-token'
+  | 'risk-event'
 
 export class SessionCodeConflictError extends Error {
   constructor() {
@@ -229,6 +249,85 @@ export async function handleEdgeRequest(
       lk_url: dependencies.publicLiveKitUrl,
       lk_token: token,
     })
+  }
+
+  if (functionName === 'assemblyai-token') {
+    const body = await readObject(request)
+    const sessionId = stringField(body, 'session_id').trim()
+    if (sessionId.length === 0) {
+      return jsonResponse({ error: 'Invalid session' }, 400)
+    }
+
+    const elderGrant = await readElderCredential(request, dependencies)
+    if (elderGrant instanceof Response) return elderGrant
+
+    const session = await dependencies.sessions.findById(sessionId)
+    if (!session) return jsonResponse({ error: 'Session not found' }, 404)
+    if (elderGrant.identity !== 'elder' || elderGrant.room !== session.code) {
+      return jsonResponse({ error: 'Elder credential is not valid for this session' }, 403)
+    }
+    if (session.status === 'ended') return jsonResponse({ error: 'Session has ended' }, 410)
+    if (session.status === 'frozen') return jsonResponse({ error: 'Session is frozen' }, 423)
+
+    const maxSessionDurationSeconds = 3_600
+    const credential = await dependencies.assemblyAI.createStreamingToken({
+      expiresInSeconds: 60,
+      maxSessionDurationSeconds,
+    })
+    return jsonResponse({
+      token: credential.token,
+      expires_in_seconds: credential.expiresInSeconds,
+      max_session_duration_seconds: maxSessionDurationSeconds,
+    })
+  }
+
+  if (functionName === 'risk-event') {
+    const body = await readObject(request)
+    const sessionId = stringField(body, 'session_id').trim()
+    const timestamp = stringField(body, 'timestamp').trim()
+    const level = stringField(body, 'level')
+    const transcript = stringField(body, 'transcript').trim()
+    const rawRules = body.matched_rules
+    const matchedRules = Array.isArray(rawRules) && rawRules.every((rule) =>
+        typeof rule === 'string' && /^[a-z0-9_]{1,64}$/.test(rule)
+      )
+      ? [...new Set(rawRules as string[])].sort()
+      : null
+    const timestampMilliseconds = Date.parse(timestamp)
+    if (
+      sessionId.length === 0 || !['warning', 'danger'].includes(level) ||
+      transcript.length === 0 || new TextEncoder().encode(transcript).byteLength > 4_096 ||
+      matchedRules === null || matchedRules.length === 0 || matchedRules.length > 20 ||
+      !Number.isFinite(timestampMilliseconds)
+    ) {
+      return jsonResponse({ error: 'Invalid risk event' }, 400)
+    }
+
+    const elderGrant = await readElderCredential(request, dependencies)
+    if (elderGrant instanceof Response) return elderGrant
+
+    const session = await dependencies.sessions.findById(sessionId)
+    if (!session) return jsonResponse({ error: 'Session not found' }, 404)
+    if (elderGrant.identity !== 'elder' || elderGrant.room !== session.code) {
+      return jsonResponse({ error: 'Elder credential is not valid for this session' }, 403)
+    }
+    if (session.status === 'ended') return jsonResponse({ error: 'Session has ended' }, 410)
+
+    const normalizedTimestamp = new Date(timestampMilliseconds).toISOString()
+    const fingerprint = [level, ...matchedRules].join(':')
+    await dependencies.events.insert({
+      sessionId,
+      actor: 'safety_monitor',
+      kind: 'safety.risk',
+      payload: {
+        timestamp: normalizedTimestamp,
+        level,
+        transcript,
+        matched_rules: matchedRules,
+        fingerprint,
+      },
+    })
+    return jsonResponse({ ok: true, fingerprint })
   }
 
   if (functionName === 'ai-guide') {
@@ -405,7 +504,22 @@ export function preflightResponse(): Response {
 export const corsHeaders = {
   'access-control-allow-origin': '*',
   'access-control-allow-methods': 'POST, OPTIONS',
-  'access-control-allow-headers': 'authorization, apikey, content-type',
+  'access-control-allow-headers': 'authorization, apikey, content-type, x-secondsight-elder-token',
+}
+
+async function readElderCredential(
+  request: Request,
+  dependencies: EdgeDependencies,
+): Promise<ElderCredentialGrant | Response> {
+  const token = request.headers.get('x-secondsight-elder-token')?.trim() ?? ''
+  if (token.length === 0) {
+    return jsonResponse({ error: 'Missing elder credential' }, 401)
+  }
+  try {
+    return await dependencies.elderCredentials.verify(token)
+  } catch {
+    return jsonResponse({ error: 'Invalid elder credential' }, 401)
+  }
 }
 
 async function readObject(request: Request): Promise<Record<string, unknown>> {

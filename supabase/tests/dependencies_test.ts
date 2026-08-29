@@ -2,6 +2,7 @@ import { strict as assert } from 'node:assert'
 import {
   collectAllAlerts,
   createAnthropicClient,
+  createAssemblyAIClient,
   createProductionDependencies,
   createSupabaseServiceFetcher,
   readProductionConfig,
@@ -25,6 +26,7 @@ Deno.test('production config reads LiveKit settings without requiring AI configu
     liveKitApiSecret: values.LIVEKIT_API_SECRET,
     liveKitUrl: values.LIVEKIT_URL,
     anthropicApiKey: undefined,
+    assemblyAIApiKey: undefined,
   })
 })
 
@@ -106,6 +108,28 @@ Deno.test('legacy service-role JWT keeps its Authorization header', async () => 
   assert.equal(observedHeaders[0].get('authorization'), `Bearer ${legacyKey}`)
 })
 
+Deno.test('AssemblyAI adapter requests a bounded temporary streaming token server-side', async () => {
+  let capturedURL = ''
+  let capturedAuthorization = ''
+  const client = createAssemblyAIClient('server-only-key', async (input, init) => {
+    capturedURL = String(input)
+    capturedAuthorization = new Headers(init?.headers).get('authorization') ?? ''
+    return Response.json({ token: 'temporary-token', expires_in_seconds: 60 })
+  })
+
+  const credential = await client.createStreamingToken({
+    expiresInSeconds: 60,
+    maxSessionDurationSeconds: 3_600,
+  })
+
+  assert.equal(
+    capturedURL,
+    'https://streaming.assemblyai.com/v3/token?expires_in_seconds=60&max_session_duration_seconds=3600',
+  )
+  assert.equal(capturedAuthorization, 'server-only-key')
+  assert.deepEqual(credential, { token: 'temporary-token', expiresInSeconds: 60 })
+})
+
 Deno.test('Anthropic adapter uses the contract models and validates JSON output', async () => {
   const bodies: Array<Record<string, unknown>> = []
   const responses = [
@@ -162,6 +186,18 @@ Deno.test('production LiveKit token lets volunteers publish only microphone and 
   assert.equal(payload.sub, 'volunteer:小王')
   assert.equal(payload.video.room, '482913')
   assert.deepEqual(payload.video.canPublishSources, ['microphone', 'camera'])
+
+  const elderToken = await dependencies.tokens.sign({
+    identity: 'elder',
+    room: '482913',
+    canPublish: true,
+    canSubscribe: true,
+  })
+  assert.deepEqual(await dependencies.elderCredentials.verify(elderToken), {
+    identity: 'elder',
+    room: '482913',
+  })
+  await assert.rejects(() => dependencies.elderCredentials.verify('not-a-valid-jwt'))
 })
 
 Deno.test('AI calls are unavailable without blocking non-AI dependencies', async () => {

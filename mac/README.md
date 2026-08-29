@@ -42,7 +42,9 @@ cp Config.template.plist Config.plist
 
 填写 B 提供的 `SUPABASE_URL` 和 `SUPABASE_ANON_KEY`，再运行打包脚本。`Config.plist` 已被 `.gitignore` 忽略。也可在直接运行 `swift run SecondSightMac` 时通过同名环境变量提供。
 
-客户端不得包含 `LIVEKIT_API_SECRET`、Supabase service role key 或 Anthropic key。LiveKit URL/token 只来自 `create-session` 响应。
+客户端不得包含 `LIVEKIT_API_SECRET`、Supabase service role key、Anthropic key 或
+`ASSEMBLYAI_API_KEY`。LiveKit URL/token 只来自 `create-session` 响应；AssemblyAI 只使用
+`assemblyai-token` 返回的短期单次凭证。
 
 ## 模块与 TASK A 对应关系
 
@@ -52,7 +54,7 @@ cp Config.template.plist Config.plist
 - A3：`ScreenCaptureService` 用 ScreenCaptureKit 采主显示器 12fps，按 bundle id 排除本 App 窗口；用户点击“求助”并确认隐私提示后，`LiveKitTransport` 同时发布 720p/15fps 的 `elder-camera` 摄像头轨、`screen-redacted` 打码屏幕轨和 `elder-microphone` 麦克风轨。志愿者端应按轨道名分别展示两条视频。
 - A4：`AccessibilityScanner` 用 AX 焦点事件即时触发并以 5Hz 扫描兜底；所有获得焦点的可编辑控件会在老人开始输入前遮挡，非空控件失焦后仍保持遮挡，邻近的密码/自动填充候选窗口一并保护；跨进程候选无法定位时先保护输入框下方的常见候选区域。扫描只判断本机值是否为空，不保存或写入摘要；`FrameRedactor` 先复制帧，再按 Retina 比例覆盖黑块。Secure Event Input 无定位矩形、AX 权限不可用或扫描尚未就绪时，整屏替换为安全占位图。
 - A5：`OverlayWindowController` 是必要的薄 AppKit 窗口桥接，内容由 SwiftUI `OverlayView` 渲染圆圈、箭头、pointer、TTL 和 clear。`DataMessageCodec` 在解析边界拒绝 `volunteer:*` 的全部 `control.*`。
-- A6：`RemoteAudioTrack.add(audioRenderer:)` 把志愿者 PCM 帧交给本机 `SFSpeechRecognizer`；final/5 秒切段调用 `ai-referee`，warn/freeze/resume 连接到悬浮层、TTS、unpublish/republish、DataChannel 和 `log-event`。网络失败时本地敏感词兜底。
+- A6：用户主动点“开始安全监听”后，`RemoteAudioTrack.add(audioRenderer:)` 才把志愿者 PCM 帧转换为 16 kHz mono PCM16 并送入 AssemblyAI Streaming v3。partial/final 字幕先经过本机 `FastRiskDetector`；同一 `turn_order` 事件 8 秒去重，最近上下文只保留 25 秒。warning/danger 立即显示大字安全层、写入 `risk-event` 并通过 LiveKit `safety.risk` 通知志愿者。“停止安全监听”会同步移除 renderer 并关闭 websocket；不会保存原始音频，也不会逐句调用 LLM。
 - A7：SwiftUI “按住说话”转写任务；只取 `LatestFrameStore` 中已经打码的帧，JPEG 长边不超过 1568px；AX 摘要深度不超过 4 且不超过 8KB；响应圈选并 TTS。
 
 ## 首次运行与人工验收
@@ -63,7 +65,9 @@ cp Config.template.plist Config.plist
 4. Safari 和 Chrome 分别打开登录页：点击空邮箱框后，在输入第一个字符前确认志愿者视角已经变黑；输入后切走焦点仍应保持遮挡，清空后才解除。触发 iCloud 密码/浏览器自动填充候选时，确认邻近候选窗口也被遮挡。对 AX 无法定位、权限不可用或启用 Secure Event Input 的页面，应看到整屏安全占位图。
 5. 确认原窗口内的房间码、悬浮圈和冻结警告不出现在志愿者视频里。
 6. 从志愿者端发 circle/arrow/pointer/clear 并核对坐标；伪造 `control.freeze` 必须被老人端丢弃。
-7. 志愿者说“把验证码念给我”，确认全屏红色冻结、音视频轨停止、双方收到 freeze 状态；老人点“是误报，继续通话”后恢复。
-8. 在等待志愿者或通话期间按住“AI 帮我”说需求，确认发出的截图已经打码，返回后屏幕圈选并朗读一步指令。
+7. 志愿者加入后，由老人点“开始安全监听”；只有状态显示“安全监听：已开启 / 正在监听……”才表示保护已连接。确认“实时字幕”在讲话未结束时就更新。
+8. 依次说“Can you open the settings page?”（不报警）、“Please tell me the verification code you just received.”、“Transfer five hundred dollars to this bank account.”、“You need to install AnyDesk so I can control your computer.”；后三句应立即显示 Security Warning，志愿者网页同步出现风险卡。
+9. 同一句危险话术连续产生 partial 时只应出现一次主要警告；点“关闭提醒”后监听继续，点“暂停通话”后 websocket 和监听停止并冻结通话，点“联系志愿者”会再次发送提醒。
+10. 在等待志愿者或通话期间按住“AI 帮我”说需求，确认发出的截图已经打码，返回后屏幕圈选并朗读一步指令。
 
 自动构建和单测不能替代上述 LiveKit/Supabase、权限、两端画面和真实音频验收。尤其 300ms 打码时延和“自身窗口不回传”必须从志愿者视角测量。

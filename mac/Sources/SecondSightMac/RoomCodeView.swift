@@ -14,7 +14,7 @@ struct RoomCodeView: View {
                 Label("正在呼叫在线助手", systemImage: "antenna.radiowaves.left.and.right")
                     .font(.system(size: 24, weight: .bold))
                 Text(broadcastDetail)
-                    .font(.system(size: 21, weight: .semibold))
+                    .font(.system(size: 24, weight: .semibold))
                     .foregroundStyle(.secondary)
             } else {
                 Label("请把这个号码告诉帮助您的人", systemImage: "person.2.wave.2.fill")
@@ -30,7 +30,7 @@ struct RoomCodeView: View {
                 .foregroundStyle(.blue)
 
             Text(discoveryMode == .broadcast ? "备用分享码；对方接入后会自动收起" : "对方加入后，号码会自动收起")
-                .font(.system(size: 21))
+                .font(.system(size: 24))
                 .foregroundStyle(.secondary)
         }
         .multilineTextAlignment(.center)

@@ -18,7 +18,7 @@ struct HelpRequestChoices: View {
             .disabled(isDisabled)
 
             Text("向所有在线助手发出求助，由愿意帮助的人选择响应。")
-                .font(.system(size: 21, weight: .semibold))
+                .font(.system(size: 24, weight: .semibold))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 

@@ -10,7 +10,8 @@
 
 1. **只看不控**:志愿者永远拿不到键盘鼠标控制权。协议里根本不存在控制消息。
 2. **默认不信任（fail-safe）**:敏感区域先遮蔽后推流;检测不到就整屏暂停，绝不"先露再补"。
-3. **AI 裁判在场**:志愿者的每一句话都被 AI 实时审查，诱导行为触发会话冻结。
+3. **实时安全裁判在场**:志愿者语音持续转写并由本地规则即时审查；危险话术立即警告，
+   LLM 只保留给未来可疑/未知上下文的按需复核。
 4. **全程可追溯**:每条 AI 指令、每个标注、每次告警落库。
 5. 老人端体验:一个大按钮，零注册，零学习成本。
 
@@ -24,14 +25,14 @@
 │  - ScreenCaptureKit │  ◀──DataChannel: 标注消息──   │  - 视频画布 + 标注层   │
 │  - AX 打码管线       │                               │  - 画圈/箭头工具       │
 │  - 全局悬浮标注层     │                               └──────────────────────┘
-│  - AI 裁判(本地转写)  │
+│  - 流式转写+本地规则  │
 │  - AI 引导模式       │        ┌────────────────────────────────┐
 └─────────┬───────────┘        │  Supabase                       │
           │                    │  - Postgres: sessions/events/   │
           └──── HTTPS ────────▶│    alerts (+RLS)                │
                                │  - Edge Functions:              │
                                │    create-session / join-session│
-                               │    ai-guide / ai-referee        │
+                               │    assemblyai-token / risk-event│
                                │  - (匿名 Auth)                  │
                                └───────────┬────────────────────┘
                                            │ ANTHROPIC_API_KEY 仅存在于此
@@ -132,17 +133,14 @@ idle → requesting(创建会话,拿6位码) → waiting(展示大字号房间�
   "检测到可疑请求，通话已暂停。请勿告诉任何人您的密码或验证码"+ AVSpeech 播报），
   同时停止发布音视频轨。老人点"我知道了，是误报"可恢复（demo 允许）。
 
-### 2.6 AI 裁判（Referee）
+### 2.6 实时安全监听
 
-- 订阅志愿者的远端音频轨 → LiveKit Swift SDK 提供 audio frame 回调 →
-  喂 `SFSpeechRecognizer`（on-device，`requiresOnDeviceRecognition = true`，
-  中英文各建一个 recognizer 或 demo 只配一种语言）。
-- 每产出一段稳定转写（segment final 或每 5 秒），POST 到 `ai-referee`
-  Edge Function:`{session_id, transcript}`。
-- 响应 `{verdict: "ok" | "warn" | "freeze", reason}`:
-  - `warn`:悬浮层角落黄色提示条 + 落库。
-  - `freeze`:触发 §2.5 冻结流程 + 落库 alerts。
-- 网络失败降级:本地关键词兜底（"验证码""密码告诉我""转账"等命中直接 freeze）。
+- 老人明确开启后，订阅志愿者远端音频轨并转为 16 kHz PCM16，通过后端短期 token
+  连接 AssemblyAI Streaming；客户端永远不持有永久 API Key。
+- partial/final transcript 立即进入本地中英规则引擎。危险话术显示高对比警告，写入
+  `risk-event`，并通过 `safety.risk` 通知志愿者端。
+- 同一 streaming turn 使用 cooldown 去重，最近上下文限制在约 25 秒；第一版不逐句
+  调用 LLM。旧 `ai-referee` 仅保留给兼容/手工测试。
 
 ### 2.7 AI 引导模式（AIGuide）
 
@@ -160,7 +158,7 @@ idle → requesting(创建会话,拿6位码) → waiting(展示大字号房间�
 依次引导授权并显示实时状态（授权后需重启 App 的项要提示）:
 1. 屏幕录制（Screen Recording）— ScreenCaptureKit 需要
 2. 辅助功能（Accessibility）— AX 扫描需要
-3. 麦克风 + 语音识别 — 通话和裁判需要
+3. 麦克风 — 通话需要；语音识别只在启用可选 AI 引导时需要
 
 demo 前一天在演示机上全部授好。开发签名用 ad-hoc 即可，不做公证。
 
@@ -248,6 +246,8 @@ Edge Function（service_role）**;客户端只读需求也走 function。这样 
    status → 透传响应。
 5. **`log-event`** (POST `{session_id, actor, kind, payload}`) — 通用审计落库。
    客户端标注、冻结、恢复等都打到这里（fire-and-forget，失败不阻塞 UI）。
+6. **`assemblyai-token` / `risk-event`** — 分别签发短期流式转写凭证、记录经本地规则
+   去重后的 warning/danger 事件；两者都校验 elder LiveKit JWT 与 room 绑定。
 
 ## 5. DataChannel 消息协议
 
@@ -289,7 +289,7 @@ JSON，UTF-8，经 LiveKit `publishData`。所有坐标归一化 0–1（相对�
 
 **Day 2 上午 — 安全核心** ✂️不可裁（这是 pitch 的命）
 - AX 打码管线 + 安全输入模式整屏兜底
-- AI 裁判:远端音频转写 → `ai-referee` → 冻结流程
+- 实时安全监听:远端音频 → AssemblyAI partial → 本地规则 → 警告/冻结流程
 - 里程碑:密码框实时打码;"坏志愿者"说出索要验证码触发全屏警告
 
 **Day 2 下午 — 打磨与演示** 可部分裁剪
@@ -298,7 +298,7 @@ JSON，UTF-8，经 LiveKit `publishData`。所有坐标归一化 0–1（相对�
 - 录备份演示视频（✂️不可裁）、彩排两遍
 
 **明确不做（写给 Codex，防止跑偏）**:Windows/iOS 端、志愿者实名审核、
-App 公证与分发、多志愿者同时在线匹配池、通话录像回放、多语言、多显示器。
+App 公证与分发、多志愿者同时接入同一通话、通话录像回放、多显示器。
 
 ## 8. 演示脚本（3 分钟）
 
@@ -309,7 +309,7 @@ App 公证与分发、多志愿者同时在线匹配池、通话录像回放、�
 3. 【30s】老人点进密码框 → **切志愿者视角:密码区域是马赛克** →
    台词:"打码发生在老人电脑本地，原始画面从未离开这台机器"。
 4. 【40s】坏志愿者环节:"把手机上的验证码念给我" → 老人屏幕瞬间全屏红色警告、
-   通话冻结 → 台词:"我们连志愿者也不信任，每场求助都有 AI 裁判在场"。
+   通话冻结 → 台词:"我们连志愿者也不信任，每场求助都有实时安全裁判在场"。
 5. 【30s】AI 引导模式:没有志愿者时 AI 直接圈出下一步 + 语音播报。
 6. 【20s】审计记录一屏带过 + 叙事收尾:数字素养 × 反诈，一套"默认不信任"架构。
 

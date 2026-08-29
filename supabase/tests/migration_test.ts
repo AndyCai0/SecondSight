@@ -14,6 +14,22 @@ Deno.test('initial migration creates the contract tables with deny-by-default RL
   assert.match(sql, /references sessions\s*\(id\)/i)
 })
 
+Deno.test('server access migration grants only the backend role', async () => {
+  const sql = await Deno.readTextFile(
+    new URL('../migrations/20260829101945_grant_server_table_access.sql', import.meta.url),
+  )
+
+  assert.match(sql, /grant select, insert, update on table public\.sessions to service_role/i)
+  assert.match(sql, /grant select, insert on table public\.session_events to service_role/i)
+  assert.match(sql, /grant select, insert on table public\.alerts to service_role/i)
+  assert.match(
+    sql,
+    /grant usage, select on sequence public\.session_events_id_seq to service_role/i,
+  )
+  assert.match(sql, /grant usage, select on sequence public\.alerts_id_seq to service_role/i)
+  assert.doesNotMatch(sql, /\bto\s+(anon|authenticated|public)\b/i)
+})
+
 Deno.test('automatic RLS helper is not exposed through the Data API', async () => {
   const sql = await Deno.readTextFile(
     new URL('../migrations/20260829084356_secure_auto_rls_trigger.sql', import.meta.url),

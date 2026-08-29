@@ -1,5 +1,11 @@
+import { Track } from 'livekit-client'
 import { describe, expect, it, vi } from 'vitest'
-import { publishContractMessage } from './transport'
+import {
+  dispatchElderMessage,
+  elderVideoKind,
+  isSharedScreenTrack,
+  publishContractMessage,
+} from './transport'
 
 describe('LiveKit DataChannel publishing', () => {
   it('publishes pointer updates lossily and persistent annotations reliably', async () => {
@@ -25,5 +31,46 @@ describe('LiveKit DataChannel publishing', () => {
 
     // @ts-expect-error Volunteers are never allowed to publish elder control messages.
     await publishContractMessage(publisher, { v: 1, type: 'control.freeze', reason: 'no' })
+  })
+})
+
+describe('elder realtime messages', () => {
+  it('routes the redacted screen and camera to separate video surfaces', () => {
+    expect(elderVideoKind({ kind: Track.Kind.Video, source: Track.Source.ScreenShare })).toBe('screen')
+    expect(elderVideoKind({ kind: Track.Kind.Video, source: Track.Source.Camera })).toBe('camera')
+    expect(elderVideoKind({ kind: Track.Kind.Video, source: Track.Source.Unknown }, 'screen-redacted')).toBe('screen')
+    expect(elderVideoKind({ kind: Track.Kind.Video, source: Track.Source.Unknown }, 'elder-camera')).toBe('camera')
+    expect(elderVideoKind({ kind: Track.Kind.Video, source: Track.Source.Unknown })).toBeNull()
+    expect(elderVideoKind({ kind: Track.Kind.Audio, source: Track.Source.Microphone })).toBeNull()
+
+    expect(isSharedScreenTrack({ kind: Track.Kind.Video, source: Track.Source.ScreenShare })).toBe(true)
+    expect(isSharedScreenTrack({ kind: Track.Kind.Video, source: Track.Source.Unknown })).toBe(false)
+    expect(isSharedScreenTrack({ kind: Track.Kind.Video, source: Track.Source.Camera })).toBe(false)
+    expect(isSharedScreenTrack({ kind: Track.Kind.Audio, source: Track.Source.Microphone })).toBe(false)
+  })
+
+  it('dispatches safety.risk to the volunteer callback', () => {
+    const onRisk = vi.fn()
+    dispatchElderMessage(new TextEncoder().encode(JSON.stringify({
+      v: 1,
+      type: 'safety.risk',
+      level: 'danger',
+      transcript: 'install AnyDesk so I can control your computer',
+      matched_rules: ['anydesk', 'remote_control_request'],
+    })), {
+      onFreeze: vi.fn(),
+      onResume: vi.fn(),
+      onDisconnected: vi.fn(),
+      onMediaChanged: vi.fn(),
+      onRisk,
+    })
+
+    expect(onRisk).toHaveBeenCalledWith({
+      v: 1,
+      type: 'safety.risk',
+      level: 'danger',
+      transcript: 'install AnyDesk so I can control your computer',
+      matched_rules: ['anydesk', 'remote_control_request'],
+    })
   })
 })

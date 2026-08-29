@@ -10,6 +10,10 @@ final class LiveKitTransport: NSObject, RoomDelegate, @unchecked Sendable {
     var onRemoteAudioTrack: (@Sendable (RemoteAudioTrack) -> Void)?
     var onRemoteCameraTrack: (@Sendable (RemoteVideoTrack) -> Void)?
     var onRemoteCameraTrackRemoved: (@Sendable () -> Void)?
+    var onRemoteAudioTrackUnavailable: (@Sendable () -> Void)?
+    var onReconnecting: (@Sendable () -> Void)?
+    var onReconnected: (@Sendable () -> Void)?
+    var onDisconnected: (@Sendable () -> Void)?
     var onMediaError: (@Sendable (ElderMediaKind, Error) -> Void)?
     var onAllMediaReady: (@Sendable () -> Void)?
     var onError: (@Sendable (Error) -> Void)?
@@ -218,6 +222,8 @@ final class LiveKitTransport: NSObject, RoomDelegate, @unchecked Sendable {
                 $0.identity?.stringValue.hasPrefix("volunteer:") == true
             }
         }
+        onRemoteAudioTrackUnavailable?()
+        onRemoteCameraTrackRemoved?()
         if shouldNotify { onVolunteerLeft?(identity) }
     }
 
@@ -233,10 +239,9 @@ final class LiveKitTransport: NSObject, RoomDelegate, @unchecked Sendable {
     }
 
     func room(_ room: Room, participant: RemoteParticipant, didUnsubscribeTrack publication: RemoteTrackPublication) {
-        guard participant.identity?.stringValue.hasPrefix("volunteer:") == true,
-              publication.source == .camera
-        else { return }
-        onRemoteCameraTrackRemoved?()
+        guard participant.identity?.stringValue.hasPrefix("volunteer:") == true else { return }
+        if publication.source == .camera { onRemoteCameraTrackRemoved?() }
+        if publication.kind == .audio { onRemoteAudioTrackUnavailable?() }
     }
 
     func room(
@@ -253,7 +258,9 @@ final class LiveKitTransport: NSObject, RoomDelegate, @unchecked Sendable {
         } catch DataMessageError.forbiddenVolunteerControl {
             return
         } catch {
-            onError?(error)
+            // Data-channel input is untrusted. A malformed or unknown message is not a
+            // transport disconnect and must not turn off otherwise healthy protection.
+            return
         }
     }
 
@@ -261,9 +268,46 @@ final class LiveKitTransport: NSObject, RoomDelegate, @unchecked Sendable {
         onError?(error ?? TransportError.connectionFailed)
     }
 
+    func room(_ room: Room, didStartReconnectWithMode reconnectMode: ReconnectMode) {
+        withState { isConnected = false }
+        onReconnecting?()
+    }
+
+    func room(_ room: Room, didCompleteReconnectWithMode reconnectMode: ReconnectMode) {
+        withState { isConnected = true }
+        schedulePublishPass()
+        onReconnected?()
+        notifyCurrentVolunteerAudioTrack(in: room)
+    }
+
     func room(_ room: Room, didDisconnectWithError error: LiveKitError?) {
-        guard let error else { return }
-        onError?(error)
+        withState {
+            isConnected = false
+            mediaEnabled = false
+            publications.removeAll()
+            failedMedia.removeAll()
+            publishPassRunning = false
+            publishTask = nil
+            hasScreenFrame = false
+        }
+        if let error {
+            onError?(error)
+        } else {
+            onDisconnected?()
+        }
+    }
+
+    private func notifyCurrentVolunteerAudioTrack(in room: Room) {
+        for participant in room.remoteParticipants.values
+            where participant.identity?.stringValue.hasPrefix("volunteer:") == true
+        {
+            for publication in participant.trackPublications.values {
+                if let audio = publication.track as? RemoteAudioTrack {
+                    onRemoteAudioTrack?(audio)
+                    return
+                }
+            }
+        }
     }
 
     enum TransportError: LocalizedError {

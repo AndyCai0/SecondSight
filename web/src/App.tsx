@@ -7,7 +7,7 @@ import {
   type JoinedSession,
   type SecondSightApi,
 } from './api'
-import type { VolunteerOutboundMessage } from './contracts'
+import type { SafetyRiskMessage, VolunteerOutboundMessage } from './contracts'
 import {
   connectVolunteerSession,
   type ConnectVolunteerSession,
@@ -44,16 +44,17 @@ function App({ api, connectSession = connectVolunteerSession }: AppProps) {
   const [joining, setJoining] = useState(false)
   const [error, setError] = useState('')
   const [frozenReason, setFrozenReason] = useState<string | null>(null)
-  const [hasScreenShare, setHasScreenShare] = useState(false)
-  const [hasElderCamera, setHasElderCamera] = useState(false)
+  const [hasScreenMedia, setHasScreenMedia] = useState(false)
+  const [hasCameraMedia, setHasCameraMedia] = useState(false)
   const [auditFailed, setAuditFailed] = useState(false)
+  const [safetyRisk, setSafetyRisk] = useState<SafetyRiskMessage | null>(null)
   const [broadcasts, setBroadcasts] = useState<HelpBroadcast[]>([])
   const [receiverStatus, setReceiverStatus] = useState<ReceiverStatus>(
     broadcastConfigured ? 'connecting' : 'unavailable',
   )
   const [claimingSessionId, setClaimingSessionId] = useState<string | null>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
-  const elderCameraRef = useRef<HTMLVideoElement>(null)
+  const cameraRef = useRef<HTMLVideoElement>(null)
   const audioRef = useRef<HTMLAudioElement>(null)
   const currentSession = useRef<VolunteerSession | null>(null)
   const manualDisconnect = useRef(false)
@@ -95,8 +96,8 @@ function App({ api, connectSession = connectVolunteerSession }: AppProps) {
   }, [active, assistantId, broadcastConfigured, configuredApi])
 
   useEffect(() => {
-    if (active && videoRef.current && elderCameraRef.current && audioRef.current) {
-      active.live.attachMedia(videoRef.current, elderCameraRef.current, audioRef.current)
+    if (active && videoRef.current && cameraRef.current && audioRef.current) {
+      active.live.attachMedia(videoRef.current, cameraRef.current, audioRef.current)
     }
   }, [active])
 
@@ -122,9 +123,10 @@ function App({ api, connectSession = connectVolunteerSession }: AppProps) {
     }
 
     setJoining(true)
-    setHasScreenShare(false)
-    setHasElderCamera(false)
+    setHasScreenMedia(false)
+    setHasCameraMedia(false)
     setAuditFailed(false)
+    setSafetyRisk(null)
     manualDisconnect.current = false
     try {
       const joined = await configuredApi.joinSession({ code, name: name.trim() })
@@ -146,9 +148,10 @@ function App({ api, connectSession = connectVolunteerSession }: AppProps) {
     if (claimingSessionId) return
 
     setClaimingSessionId(broadcast.sessionId)
-    setHasScreenShare(false)
-    setHasElderCamera(false)
+    setHasScreenMedia(false)
+    setHasCameraMedia(false)
     setAuditFailed(false)
+    setSafetyRisk(null)
     manualDisconnect.current = false
     try {
       const joined = await configuredApi.claimBroadcast({
@@ -178,8 +181,11 @@ function App({ api, connectSession = connectVolunteerSession }: AppProps) {
         setActive(null)
         setError('连接已断开，请重新进入房间')
       },
-      onScreenShareChanged: setHasScreenShare,
-      onElderCameraChanged: setHasElderCamera,
+      onMediaChanged: (kind, isAvailable) => {
+        if (kind === 'screen') setHasScreenMedia(isAvailable)
+        if (kind === 'camera') setHasCameraMedia(isAvailable)
+      },
+      onRisk: setSafetyRisk,
     })
     currentSession.current = live
     setActive({ joined, live, contextLabel, volunteerName })
@@ -192,8 +198,9 @@ function App({ api, connectSession = connectVolunteerSession }: AppProps) {
     currentSession.current = null
     setActive(null)
     setFrozenReason(null)
-    setHasScreenShare(false)
-    setHasElderCamera(false)
+    setHasScreenMedia(false)
+    setHasCameraMedia(false)
+    setSafetyRisk(null)
   }
 
   function audit(message: VolunteerOutboundMessage): void {
@@ -328,16 +335,54 @@ function App({ api, connectSession = connectVolunteerSession }: AppProps) {
             </div>
           </section>
 
-          <AnnotationSurface
-            videoRef={videoRef}
-            elderCameraRef={elderCameraRef}
-            hasScreenShare={hasScreenShare}
-            hasElderCamera={hasElderCamera}
-            disabled={frozenReason !== null}
-            send={(message) => active.live.send(message)}
-            log={audit}
-            onSendError={() => setError('标注发送失败，请检查连接')}
-          />
+          {safetyRisk && (
+            <section className={`safety-risk-card ${safetyRisk.level}`} role="alert">
+              <div className="safety-risk-icon" aria-hidden="true">!</div>
+              <div>
+                <p className="eyebrow">实时安全提醒</p>
+                <h2>长辈端检测到危险话术</h2>
+                <p className="risk-transcript">“{safetyRisk.transcript}”</p>
+                {safetyRisk.transcript_truncated && <p>字幕过长，风险卡只显示前 1,000 个字符。</p>}
+                <p>请立即停止询问验证码、密码、付款信息或远程控制权限。</p>
+              </div>
+              <button type="button" onClick={() => setSafetyRisk(null)}>我知道了</button>
+            </section>
+          )}
+
+          <div className="session-media-grid">
+            <AnnotationSurface
+              videoRef={videoRef}
+              hasMedia={hasScreenMedia}
+              disabled={frozenReason !== null}
+              send={(message) => active.live.send(message)}
+              log={audit}
+              onSendError={() => setError('标注发送失败，请检查连接')}
+            />
+            <aside className="camera-panel" aria-labelledby="elder-camera-title">
+              <div className="camera-heading">
+                <div>
+                  <p className="camera-kicker">面对面沟通</p>
+                  <h2 id="elder-camera-title">长辈本人</h2>
+                </div>
+                <span className={`camera-status ${hasCameraMedia ? 'connected' : ''}`}>
+                  {hasCameraMedia ? '画面已连接' : '等待画面'}
+                </span>
+              </div>
+              <div className="camera-stage">
+                <video ref={cameraRef} autoPlay playsInline aria-label="长辈摄像头画面" />
+                {!hasCameraMedia && (
+                  <div className="camera-waiting" aria-live="polite">
+                    <span aria-hidden="true">◎</span>
+                    <strong>等待长辈开启摄像头…</strong>
+                    <small>摄像头就绪后会自动出现</small>
+                  </div>
+                )}
+              </div>
+              <p className="camera-note">
+                摄像头与脱敏电脑画面分开显示，标注只会落在电脑画面上。
+              </p>
+            </aside>
+          </div>
           <audio ref={audioRef} autoPlay />
           <div className="session-footer">
             <p><strong>记住：</strong>只描述屏幕上看见的内容，不询问密码、验证码或付款信息。</p>

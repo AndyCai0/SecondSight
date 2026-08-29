@@ -17,13 +17,22 @@ struct OverlayAnnotation: Identifiable, Equatable {
     let expiresAt: Date
 }
 
+struct SafetyWarning: Equatable {
+    let level: RiskLevel
+    let transcript: String
+}
+
 @MainActor
 final class OverlayModel: ObservableObject {
     @Published var annotations: [OverlayAnnotation] = []
     @Published var warning: String?
     @Published var frozenReason: String?
     @Published private(set) var volunteerCameraTrack: RemoteVideoTrack?
+    @Published var safetyWarning: SafetyWarning?
     var onResume: (() -> Void)?
+    var onSafetyPause: (() -> Void)?
+    var onSafetyDismiss: (() -> Void)?
+    var onContactVolunteer: (() -> Void)?
     private var cleanupTimer: Timer?
     private var warningTask: Task<Void, Never>?
 
@@ -49,7 +58,7 @@ final class OverlayModel: ObservableObject {
             upsert(OverlayAnnotation(id: "pointer", shape: .pointer(x: x, y: y), expiresAt: now.addingTimeInterval(0.35)))
         case .clear:
             annotations.removeAll()
-        case .freeze, .resume, .textToSpeech:
+        case .freeze, .resume, .textToSpeech, .safetyRisk:
             break
         }
     }
@@ -72,6 +81,10 @@ final class OverlayModel: ObservableObject {
     func resume() { frozenReason = nil }
     func showVolunteerCamera(_ track: RemoteVideoTrack) { volunteerCameraTrack = track }
     func hideVolunteerCamera() { volunteerCameraTrack = nil }
+    func showSafetyWarning(level: RiskLevel, transcript: String) {
+        safetyWarning = .init(level: level, transcript: transcript)
+    }
+    func dismissSafetyWarning() { safetyWarning = nil }
 
     private func upsert(_ item: OverlayAnnotation) {
         annotations.removeAll { $0.id == item.id }
@@ -135,6 +148,46 @@ struct OverlayView: View {
                     }
                 }
                 .padding(32)
+            }
+            if let warning = model.safetyWarning, model.frozenReason == nil {
+                VStack(spacing: 22) {
+                    Image(systemName: "exclamationmark.shield.fill")
+                        .font(.system(size: 72))
+                    Text("安全警告")
+                        .font(.system(size: 42, weight: .heavy))
+                    Text("对方可能正在索要您的敏感信息。")
+                        .font(.system(size: 30, weight: .bold))
+                        .multilineTextAlignment(.center)
+                    Text("不要告诉任何人验证码、密码、PIN 或银行卡信息。")
+                        .font(.system(size: 28, weight: .heavy))
+                        .multilineTextAlignment(.center)
+                    Text("“\(warning.transcript)”")
+                        .font(.system(size: 24, weight: .medium))
+                        .lineLimit(3)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 22)
+                    HStack(spacing: 18) {
+                        Button("暂停通话") { model.onSafetyPause?() }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.red)
+                        Button("关闭提醒") { model.onSafetyDismiss?() }
+                            .buttonStyle(.bordered)
+                        Button("联系志愿者") { model.onContactVolunteer?() }
+                            .buttonStyle(.borderedProminent)
+                    }
+                    .controlSize(.large)
+                    .font(.system(size: 24, weight: .bold))
+                }
+                .foregroundStyle(.black)
+                .padding(36)
+                .frame(maxWidth: 900)
+                .background(Color.yellow, in: RoundedRectangle(cornerRadius: 28))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 28)
+                        .stroke(warning.level == .danger ? Color.red : Color.black, lineWidth: 8)
+                )
+                .shadow(color: .black.opacity(0.55), radius: 28, y: 10)
+                .padding(40)
             }
             if let reason = model.frozenReason {
                 VStack(spacing: 32) {
@@ -213,8 +266,15 @@ final class OverlayWindowController {
 
     func setFrozen(_ frozen: Bool) {
         show()
-        window?.ignoresMouseEvents = !frozen
+        window?.ignoresMouseEvents = !(frozen || model.safetyWarning != nil)
         if frozen { window?.makeKeyAndOrderFront(nil) }
+    }
+
+    func setSafetyWarningVisible(_ visible: Bool) {
+        if visible { show() }
+        guard window != nil else { return }
+        window?.ignoresMouseEvents = !(visible || model.frozenReason != nil)
+        if visible { window?.makeKeyAndOrderFront(nil) }
     }
 
     func close() {

@@ -17,6 +17,7 @@ describe('volunteer app', () => {
         throw new Error('not used')
       }),
       logEvent: vi.fn(async () => undefined),
+      listAlerts: vi.fn(async () => []),
     }
     let events: LiveSessionEvents | undefined
     const session: VolunteerSession = {
@@ -38,6 +39,10 @@ describe('volunteer app', () => {
 
     expect(await screen.findByText('正在协助')).toBeInTheDocument()
     expect(api.joinSession).toHaveBeenCalledWith({ code: '482913', name: '小王' })
+    expect(screen.getByRole('link', { name: '查看安全告警记录' })).toHaveAttribute(
+      'href',
+      '/alerts.html?session_id=session-1',
+    )
 
     act(() => events?.onFreeze('检测到索要验证码'))
     expect(screen.getByRole('alertdialog')).toHaveTextContent('会话已被 AI 安全助手暂停')

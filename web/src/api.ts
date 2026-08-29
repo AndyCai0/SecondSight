@@ -20,10 +20,19 @@ export interface LogEventInput {
   payload: Record<string, unknown>
 }
 
+export interface AlertRecord {
+  id: number
+  timestamp: string
+  severity: 'warn' | 'freeze'
+  transcript: string
+  reason: string
+}
+
 export interface SecondSightApi {
   joinSession(input: JoinSessionInput): Promise<JoinedSession>
   createSession(): Promise<CreatedSession>
   logEvent(input: LogEventInput): Promise<void>
+  listAlerts(sessionId: string): Promise<AlertRecord[]>
 }
 
 export class ApiError extends Error {
@@ -111,6 +120,30 @@ export function createSecondSightApi(options: ApiOptions): SecondSightApi {
         throw new ApiError('审计事件未被服务确认', 502)
       }
     },
+    async listAlerts(sessionId) {
+      const payload = await request('list-alerts', { session_id: sessionId })
+      if (!isRecord(payload) || !Array.isArray(payload.alerts)) {
+        throw new ApiError('告警记录格式无效', 502)
+      }
+      return payload.alerts.map(parseAlert)
+    },
+  }
+}
+
+function parseAlert(value: unknown): AlertRecord {
+  if (
+    !isRecord(value) || typeof value.id !== 'number' || typeof value.ts !== 'string' ||
+    !['warn', 'freeze'].includes(String(value.severity)) ||
+    typeof value.transcript !== 'string' || typeof value.reason !== 'string'
+  ) {
+    throw new ApiError('告警记录格式无效', 502)
+  }
+  return {
+    id: value.id,
+    timestamp: value.ts,
+    severity: value.severity as AlertRecord['severity'],
+    transcript: value.transcript,
+    reason: value.reason,
   }
 }
 

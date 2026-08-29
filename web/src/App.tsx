@@ -191,6 +191,14 @@ function App({ api, connectSession = connectVolunteerSession }: AppProps) {
             </div>
             <div className="session-actions">
               <span className="connection-pill"><i /> 已安全连接</span>
+              <a
+                className="alerts-link"
+                href={`/alerts.html?session_id=${encodeURIComponent(active.joined.sessionId)}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                查看安全告警记录
+              </a>
               <button className="leave-button" type="button" onClick={() => void leaveSession()}>
                 结束本次协助
               </button>

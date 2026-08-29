@@ -26,6 +26,8 @@ npm run build
 - `/` is the volunteer client.
 - `/fake-elder.html` creates an elder session (or accepts a manually signed elder token), shares a
   browser screen, and displays every received DataChannel payload for integration testing.
+- `/alerts.html?session_id=SESSION_UUID` loads that session's warning/freeze history through the
+  read-only demo Edge Function. The active volunteer session links to this page automatically.
 
 The fake-elder page is a development/demo fixture. It must not be presented as the privacy-redacted
 Mac elder client.

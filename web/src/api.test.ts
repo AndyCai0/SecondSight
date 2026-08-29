@@ -71,4 +71,34 @@ describe('SecondSight API', () => {
       payload: { v: 1, type: 'annotate.clear' },
     })
   })
+
+  it('loads one session alert history for the traceability page', async () => {
+    const alerts = [{
+      id: 12,
+      timestamp: '2026-08-29T06:30:00.000Z',
+      severity: 'freeze' as const,
+      transcript: '把验证码念给我',
+      reason: '索要短信验证码',
+    }]
+    const fetcher = vi.fn(async () => Response.json({
+      alerts: [{
+        id: 12,
+        ts: '2026-08-29T06:30:00.000Z',
+        severity: 'freeze',
+        transcript: '把验证码念给我',
+        reason: '索要短信验证码',
+      }],
+    }))
+    const api = createSecondSightApi({
+      supabaseUrl: 'https://example.supabase.co',
+      supabaseAnonKey: 'public-anon-key',
+      fetcher,
+    })
+
+    await expect(api.listAlerts('session-2')).resolves.toEqual(alerts)
+    expect(fetcher).toHaveBeenCalledWith(
+      'https://example.supabase.co/functions/v1/list-alerts',
+      expect.objectContaining({ body: JSON.stringify({ session_id: 'session-2' }) }),
+    )
+  })
 })

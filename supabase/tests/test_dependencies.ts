@@ -38,6 +38,9 @@ export function makeTestDependencies(overrides: DependencyOverrides = {}): EdgeD
       async insert() {
         return unexpected('alerts.insert')
       },
+      async list() {
+        return unexpected('alerts.list')
+      },
     },
     tokens: {
       async sign() {

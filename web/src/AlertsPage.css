@@ -1,0 +1,136 @@
+.alerts-shell {
+  min-height: 100vh;
+  color: var(--ink);
+}
+
+.alerts-header {
+  min-height: 74px;
+  padding: 0 4vw;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--muted);
+  background: rgba(8, 21, 19, 0.82);
+  backdrop-filter: blur(18px);
+}
+
+.alerts-header a {
+  color: var(--mint);
+  text-decoration: none;
+  font-weight: 700;
+}
+
+.alerts-header span {
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.alerts-main {
+  width: min(920px, 88vw);
+  margin: 0 auto;
+  padding: 72px 0 90px;
+}
+
+.alerts-main .eyebrow {
+  margin: 0 0 12px;
+  color: var(--mint);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.alerts-main h1 {
+  margin: 0;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 58px;
+  font-weight: 500;
+  letter-spacing: -0.04em;
+}
+
+.alerts-intro {
+  max-width: 620px;
+  margin: 18px 0 36px;
+  color: var(--muted);
+  line-height: 1.7;
+}
+
+.alerts-list {
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 14px;
+  list-style: none;
+}
+
+.alert-card {
+  position: relative;
+  overflow: hidden;
+  padding: 24px 26px 26px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: linear-gradient(135deg, rgba(23, 48, 44, 0.86), rgba(11, 28, 25, 0.92));
+}
+
+.alert-card::before {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 4px;
+  background: #f0b564;
+  content: "";
+}
+
+.alert-card--freeze::before {
+  background: var(--danger);
+}
+
+.alert-card__meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.alert-card__meta strong {
+  color: #f0c985;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.alert-card--freeze .alert-card__meta strong {
+  color: #ff9d8d;
+}
+
+.alert-card__meta time {
+  color: #718b84;
+  font-size: 12px;
+}
+
+.alert-card h2 {
+  margin: 18px 0 8px;
+  font-size: 21px;
+}
+
+.alert-card p {
+  margin: 0;
+  color: #b8cbc6;
+  line-height: 1.65;
+}
+
+.alerts-empty,
+.alerts-main [role="status"],
+.alerts-main [role="alert"] {
+  padding: 22px 24px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  color: var(--muted);
+  background: var(--panel);
+}
+
+.alerts-main .form-error,
+.alerts-main [role="alert"] {
+  color: #ff9d8d;
+}

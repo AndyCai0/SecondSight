@@ -6,6 +6,7 @@ Deno.test('all deployable Edge Function modules export a fetch handler', async (
     import('../functions/join-session/index.ts'),
     import('../functions/ai-guide/index.ts'),
     import('../functions/ai-referee/index.ts'),
+    import('../functions/list-alerts/index.ts'),
     import('../functions/log-event/index.ts'),
   ])
 

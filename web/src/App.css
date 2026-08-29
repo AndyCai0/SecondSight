@@ -281,6 +281,18 @@
   background: rgba(23, 48, 44, 0.72);
 }
 
+.alerts-link {
+  padding: 10px 2px;
+  color: var(--mint);
+  font-size: 13px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.alerts-link:hover {
+  text-decoration: underline;
+}
+
 .leave-button {
   padding: 10px 15px;
 }

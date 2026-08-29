@@ -14,3 +14,6 @@ verify_jwt = true
 
 [functions.log-event]
 verify_jwt = true
+
+[functions.list-alerts]
+verify_jwt = true

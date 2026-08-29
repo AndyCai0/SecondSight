@@ -1,6 +1,11 @@
 import { createClient } from 'npm:@supabase/supabase-js@2.112.4'
 import { AccessToken, TrackSource } from 'npm:livekit-server-sdk@2.18.0'
-import { type EdgeDependencies, SessionCodeConflictError, type SessionRecord } from './handler.ts'
+import {
+  type AlertRecord,
+  type EdgeDependencies,
+  SessionCodeConflictError,
+  type SessionRecord,
+} from './handler.ts'
 
 export interface ProductionConfig {
   supabaseUrl: string
@@ -100,6 +105,16 @@ export function createProductionDependencies(
           reason: input.reason,
         })
         if (error) throw new Error('Unable to record alert')
+      },
+      async list(sessionId) {
+        const { data, error } = await database
+          .from('alerts')
+          .select('id, ts, severity, transcript, reason')
+          .eq('session_id', sessionId)
+          .order('ts', { ascending: false })
+          .limit(200)
+        if (error) throw new Error('Unable to list alerts')
+        return (data ?? []) as AlertRecord[]
       },
     },
     tokens: {

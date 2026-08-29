@@ -9,6 +9,7 @@ export default defineConfig({
     rollupOptions: {
       input: {
         main: fileURLToPath(new URL('./index.html', import.meta.url)),
+        alerts: fileURLToPath(new URL('./alerts.html', import.meta.url)),
         fakeElder: fileURLToPath(new URL('./fake-elder.html', import.meta.url)),
       },
     },

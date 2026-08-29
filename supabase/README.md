@@ -1,8 +1,8 @@
 # SecondSight Supabase backend
 
 The three database tables are private behind deny-by-default RLS. Browsers and the Mac app call the
-five Edge Functions with the project's public anonymous key; only the functions hold the database,
-LiveKit, and Anthropic secrets.
+five contract Edge Functions plus the demo-only read-only `list-alerts` function with the project's
+public anonymous key; only the functions hold the database, LiveKit, and Anthropic secrets.
 
 ## Configure and deploy
 
@@ -20,6 +20,7 @@ supabase functions deploy join-session
 supabase functions deploy ai-guide
 supabase functions deploy ai-referee
 supabase functions deploy log-event
+supabase functions deploy list-alerts
 ```
 
 Hosted Supabase supplies `SUPABASE_URL` and the current `SUPABASE_SECRET_KEYS` JSON map. The runtime
@@ -93,6 +94,16 @@ curl --fail-with-body "$SECOND_SIGHT_FUNCTIONS_URL/log-event" \
   -H "apikey: $SECOND_SIGHT_ANON_KEY" \
   -H 'Content-Type: application/json' \
   -d "{\"session_id\":\"$SECOND_SIGHT_SESSION_ID\",\"actor\":\"volunteer\",\"kind\":\"annotate.clear\",\"payload\":{}}"
+```
+
+List the current session's alerts newest-first:
+
+```bash
+curl --fail-with-body "$SECOND_SIGHT_FUNCTIONS_URL/list-alerts" \
+  -H "Authorization: Bearer $SECOND_SIGHT_ANON_KEY" \
+  -H "apikey: $SECOND_SIGHT_ANON_KEY" \
+  -H 'Content-Type: application/json' \
+  -d "{\"session_id\":\"$SECOND_SIGHT_SESSION_ID\"}"
 ```
 
 ## Local verification

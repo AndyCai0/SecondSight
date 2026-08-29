@@ -6,6 +6,14 @@ export interface SessionRecord {
   status: SessionStatus
 }
 
+export interface AlertRecord {
+  id: number
+  ts: string
+  severity: 'warn' | 'freeze'
+  transcript: string
+  reason: string
+}
+
 export interface TokenGrant {
   identity: string
   room: string
@@ -36,6 +44,7 @@ export interface EdgeDependencies {
       transcript: string
       reason: string
     }): Promise<void>
+    list(sessionId: string): Promise<AlertRecord[]>
   }
   tokens: {
     sign(grant: TokenGrant): Promise<string>
@@ -64,6 +73,7 @@ export type EdgeFunctionName =
   | 'join-session'
   | 'ai-guide'
   | 'ai-referee'
+  | 'list-alerts'
   | 'log-event'
 
 export class SessionCodeConflictError extends Error {
@@ -151,6 +161,15 @@ export async function handleEdgeRequest(
 
     await dependencies.events.insert({ sessionId, actor, kind, payload })
     return jsonResponse({ ok: true })
+  }
+
+  if (functionName === 'list-alerts') {
+    const body = await readObject(request)
+    const sessionId = stringField(body, 'session_id').trim()
+    if (sessionId.length === 0) {
+      return jsonResponse({ error: 'Invalid session' }, 400)
+    }
+    return jsonResponse({ alerts: await dependencies.alerts.list(sessionId) })
   }
 
   if (functionName === 'join-session') {

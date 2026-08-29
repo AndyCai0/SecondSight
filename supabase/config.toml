@@ -1,0 +1,16 @@
+project_id = "secondsight"
+
+[functions.create-session]
+verify_jwt = true
+
+[functions.join-session]
+verify_jwt = true
+
+[functions.ai-guide]
+verify_jwt = true
+
+[functions.ai-referee]
+verify_jwt = true
+
+[functions.log-event]
+verify_jwt = true

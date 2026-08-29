@@ -1,0 +1,13 @@
+{
+  "name": "@secondsight/supabase",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "check": "deno check functions/_shared/*.ts functions/*/index.ts",
+    "lint": "deno lint functions tests",
+    "test": "deno test --allow-env --allow-read tests"
+  },
+  "devDependencies": {
+    "deno": "2.9.6"
+  }
+}

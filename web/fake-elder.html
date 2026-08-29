@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex" />
+    <title>SecondSight · Fake Elder 协议测试页</title>
+    <style>
+      :root { font-family: ui-sans-serif, system-ui, sans-serif; color: #eaf3f1; background: #081513; }
+      * { box-sizing: border-box; }
+      body { margin: 0; padding: 40px; }
+      main { width: min(980px, 100%); margin: auto; }
+      h1 { margin-bottom: 8px; font-family: Georgia, serif; font-size: 40px; font-weight: 500; }
+      p { color: #9aafaa; line-height: 1.7; }
+      form, .panel { margin-top: 24px; padding: 24px; border: 1px solid #27423d; border-radius: 16px; background: #102320; }
+      .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+      label { display: grid; gap: 7px; color: #bcd0ca; font-size: 13px; }
+      input { width: 100%; padding: 12px; border: 1px solid #36534d; border-radius: 9px; color: #eaf3f1; background: #081513; }
+      button { margin-top: 18px; padding: 13px 18px; border: 0; border-radius: 9px; color: #071b17; background: #6fe2c0; font-weight: 750; cursor: pointer; }
+      button:disabled { opacity: .5; cursor: wait; }
+      code { color: #6fe2c0; }
+      #status { color: #6fe2c0; }
+      #messages { max-height: 320px; overflow: auto; padding-left: 24px; }
+      #messages li { margin: 9px 0; color: #c9d8d4; font-family: ui-monospace, monospace; font-size: 12px; overflow-wrap: anywhere; }
+      video { width: 100%; margin-top: 20px; border-radius: 12px; background: #030706; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <p><a href="/">← 返回志愿者端</a></p>
+      <h1>Fake Elder 协议测试页</h1>
+      <p>调用 <code>create-session</code> 或使用手签 elder token，发布浏览器屏幕，并把收到的 DataChannel 消息原样显示。</p>
+      <form id="connect-form">
+        <div class="grid">
+          <label>Supabase URL <input id="supabase-url" type="url" /></label>
+          <label>Public anon key <input id="anon-key" type="password" autocomplete="off" /></label>
+          <label>手签 LiveKit URL（可选） <input id="livekit-url" type="url" placeholder="wss://…" /></label>
+          <label>手签 elder token（可选） <input id="livekit-token" type="password" autocomplete="off" /></label>
+        </div>
+        <button id="connect-button" type="submit">创建房间并共享屏幕</button>
+      </form>
+      <section class="panel">
+        <strong>状态：</strong> <span id="status">尚未连接</span>
+        <p>房间码：<code id="room-code">—</code></p>
+        <video id="preview" autoplay playsinline muted></video>
+      </section>
+      <section class="panel">
+        <h2>收到的 DataChannel 消息</h2>
+        <ol id="messages"></ol>
+      </section>
+    </main>
+    <script type="module" src="/src/fake-elder.ts"></script>
+  </body>
+</html>

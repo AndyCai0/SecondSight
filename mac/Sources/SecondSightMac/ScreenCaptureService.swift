@@ -15,6 +15,10 @@ final class LatestFrameStore: @unchecked Sendable {
     func get() -> CVPixelBuffer? {
         lock.lock(); defer { lock.unlock() }; return frame
     }
+
+    func clear() {
+        lock.lock(); frame = nil; lock.unlock()
+    }
 }
 
 final class ScreenCaptureService: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
@@ -27,6 +31,8 @@ final class ScreenCaptureService: NSObject, SCStreamOutput, SCStreamDelegate, @u
     private let queue = DispatchQueue(label: "study.secondsight.screen-capture", qos: .userInteractive)
     private var stream: SCStream?
     private var displayFramePoints = CGRect.zero
+    // Accessed only on `queue`, including from the sample callback.
+    private var isAcceptingFrames = false
 
     init(scanner: AccessibilityScanner) {
         self.scanner = scanner
@@ -62,15 +68,33 @@ final class ScreenCaptureService: NSObject, SCStreamOutput, SCStreamDelegate, @u
         try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: queue)
         self.stream = stream
         scanner.start()
-        try await stream.startCapture()
+        queue.sync { isAcceptingFrames = true }
+        do {
+            try await stream.startCapture()
+        } catch {
+            queue.sync { isAcceptingFrames = false }
+            try? stream.removeStreamOutput(self, type: .screen)
+            self.stream = nil
+            scanner.stop()
+            throw error
+        }
     }
 
     func stop() async {
+        // Close the application-level frame gate first. queue.sync is the
+        // barrier that waits for any callback already redacting a frame;
+        // later ScreenCaptureKit callbacks are dropped.
+        queue.sync { isAcceptingFrames = false }
+        if let stream {
+            try? await stream.stopCapture()
+            try? stream.removeStreamOutput(self, type: .screen)
+            // Drain callbacks enqueued between closing the gate and stopping
+            // ScreenCaptureKit while the last redaction snapshot is present.
+            queue.sync {}
+            self.stream = nil
+        }
         scanner.stop()
-        guard let stream else { return }
-        try? await stream.stopCapture()
-        try? stream.removeStreamOutput(self, type: .screen)
-        self.stream = nil
+        latestFrame.clear()
     }
 
     func restart() async throws {
@@ -83,7 +107,8 @@ final class ScreenCaptureService: NSObject, SCStreamOutput, SCStreamDelegate, @u
     }
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
-        guard type == .screen,
+        guard isAcceptingFrames,
+              type == .screen,
               sampleBuffer.isValid,
               let source = CMSampleBufferGetImageBuffer(sampleBuffer),
               let output = redactor.redact(source: source, snapshot: scanner.store.current(), displayFramePoints: displayFramePoints)

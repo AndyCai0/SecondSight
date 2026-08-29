@@ -8,6 +8,8 @@ Deno.test('all deployable Edge Function modules export a fetch handler', async (
     import('../functions/ai-referee/index.ts'),
     import('../functions/list-alerts/index.ts'),
     import('../functions/log-event/index.ts'),
+    import('../functions/assemblyai-token/index.ts'),
+    import('../functions/risk-event/index.ts'),
   ])
 
   for (const module of modules) {

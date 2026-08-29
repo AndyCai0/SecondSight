@@ -26,6 +26,15 @@ export type PointerMessage = {
   y: number
 }
 
+export type SafetyRiskMessage = {
+  v: 1
+  type: 'safety.risk'
+  level: 'warning' | 'danger'
+  transcript: string
+  transcript_truncated?: boolean
+  matched_rules: string[]
+}
+
 export type DataMessage =
   | CircleAnnotation
   | ArrowAnnotation
@@ -34,10 +43,11 @@ export type DataMessage =
   | { v: 1; type: 'control.freeze'; reason: string }
   | { v: 1; type: 'control.resume' }
   | { v: 1; type: 'chat.tts'; text: string }
+  | SafetyRiskMessage
 
 export type VolunteerOutboundMessage = Exclude<
   DataMessage,
-  { type: 'control.freeze' | 'control.resume' }
+  { type: 'control.freeze' | 'control.resume' | 'safety.risk' }
 >
 
 export function decodeDataMessage(bytes: Uint8Array): DataMessage {
@@ -80,6 +90,19 @@ export function decodeDataMessage(bytes: Uint8Array): DataMessage {
     case 'chat.tts':
       assertText(value.text, 'text')
       return value as DataMessage
+    case 'safety.risk':
+      if (value.level !== 'warning' && value.level !== 'danger') {
+        throw new Error('level must be warning or danger')
+      }
+      assertText(value.transcript, 'transcript', Number.MAX_SAFE_INTEGER)
+      if (Array.from(value.transcript).length > 1_000) {
+        throw new Error('transcript must contain at most 1000 Unicode scalar values')
+      }
+      if (value.transcript_truncated !== undefined && value.transcript_truncated !== true) {
+        throw new Error('transcript_truncated must be true when present')
+      }
+      assertRiskRules(value.matched_rules)
+      return value as SafetyRiskMessage
     default:
       throw new Error(`Unsupported DataChannel message type: ${value.type}`)
   }
@@ -122,8 +145,18 @@ function assertId(value: unknown): asserts value is string {
   }
 }
 
-function assertText(value: unknown, field: string): asserts value is string {
-  if (typeof value !== 'string' || value.trim().length === 0 || value.length > 500) {
+function assertText(value: unknown, field: string, maximumLength = 500): asserts value is string {
+  if (typeof value !== 'string' || value.trim().length === 0 || value.length > maximumLength) {
     throw new Error(`${field} is invalid`)
+  }
+}
+
+function assertRiskRules(value: unknown): asserts value is string[] {
+  if (
+    !Array.isArray(value) || value.length === 0 || value.length > 20 ||
+    value.some((rule) => typeof rule !== 'string' || !/^[a-z0-9_]{1,64}$/.test(rule)) ||
+    new Set(value).size !== value.length
+  ) {
+    throw new Error('matched_rules is invalid')
   }
 }

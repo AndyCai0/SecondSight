@@ -5,6 +5,8 @@ type DependencyOverrides = {
   events?: Partial<EdgeDependencies['events']>
   alerts?: Partial<EdgeDependencies['alerts']>
   tokens?: Partial<EdgeDependencies['tokens']>
+  elderCredentials?: Partial<EdgeDependencies['elderCredentials']>
+  assemblyAI?: Partial<EdgeDependencies['assemblyAI']>
   ai?: Partial<EdgeDependencies['ai']>
   publicLiveKitUrl?: string
   makeCode?: () => string
@@ -21,6 +23,9 @@ export function makeTestDependencies(overrides: DependencyOverrides = {}): EdgeD
       },
       async findByCode() {
         return unexpected('sessions.findByCode')
+      },
+      async findById() {
+        return unexpected('sessions.findById')
       },
       async activate() {
         return unexpected('sessions.activate')
@@ -47,6 +52,16 @@ export function makeTestDependencies(overrides: DependencyOverrides = {}): EdgeD
         return unexpected('tokens.sign')
       },
     },
+    elderCredentials: {
+      async verify() {
+        return unexpected('elderCredentials.verify')
+      },
+    },
+    assemblyAI: {
+      async createStreamingToken() {
+        return unexpected('assemblyAI.createStreamingToken')
+      },
+    },
     ai: {
       async guide() {
         return unexpected('ai.guide')
@@ -66,6 +81,8 @@ export function makeTestDependencies(overrides: DependencyOverrides = {}): EdgeD
     events: { ...defaults.events, ...overrides.events },
     alerts: { ...defaults.alerts, ...overrides.alerts },
     tokens: { ...defaults.tokens, ...overrides.tokens },
+    elderCredentials: { ...defaults.elderCredentials, ...overrides.elderCredentials },
+    assemblyAI: { ...defaults.assemblyAI, ...overrides.assemblyAI },
     ai: { ...defaults.ai, ...overrides.ai },
   }
 }

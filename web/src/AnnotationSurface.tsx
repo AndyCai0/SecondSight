@@ -239,7 +239,7 @@ export function AnnotationSurface({
             setDragEnd(null)
           }}
         />
-        {!hasMedia && <div className="waiting-media">等待长辈分享画面…</div>}
+        {!hasMedia && <div className="waiting-media">等待长辈分享电脑画面…</div>}
       </div>
       <div className="annotation-toolbar" role="toolbar" aria-label="标注工具">
         <button className={tool === 'circle' ? 'selected' : ''} onClick={() => setTool('circle')} disabled={disabled}>

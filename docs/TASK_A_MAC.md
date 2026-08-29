@@ -16,14 +16,16 @@
 ### A1. 会话状态机 + UI
 `idle → requesting → waiting(展示房间码) → connected → frozen → ended`
 
-- 菜单栏点"求助"→ 调 `create-session`（见 CONTRACT §4.1）→ 在原窗口大字显示
-  6 位码，同时 `AVSpeechSynthesizer` 朗读，不另开房间码窗口。志愿者加入
-  （LiveKit participant joined 事件）后该号码区域收起。
+- 菜单栏提供“呼叫在线助手”和“使用 6 位分享码”两条入口；两者都先明确说明摄像头
+  将被分享并由老人确认，再调用 `create-session`（见 CONTRACT §4.1）。等待广播时仍在
+  原窗口展示备用 6 位码；分享码模式同时用 `AVSpeechSynthesizer` 朗读。志愿者加入
+  （LiveKit participant joined 事件）后号码区域收起。
 - 所有面向老人的 UI:字号 ≥ 24pt，按钮大，文案口语化中文。
 
 ### A2. 权限向导（首启动）
-依次检测并引导:屏幕录制、辅助功能、麦克风、语音识别。每项显示实时状态，
-未授权项给"打开系统设置"按钮。屏幕录制授权后提示需重启 App。
+默认安全协助依次检测并引导:屏幕录制、辅助功能、麦克风。每项显示实时状态，
+未授权项给"打开系统设置"按钮。屏幕录制授权后提示需重启 App。只有启用可选的
+本地 AI 引导时才额外要求语音识别权限。
 
 ### A3. 屏幕采集
 - ScreenCaptureKit:主显示器，10–15 fps，输出适配 LiveKit 自定义视频轨
@@ -58,23 +60,24 @@
   `annotate.clear` 清空。
 - 丢弃来自 `volunteer:*` 的 `control.*` 消息（安全规则）。
 
-### A6. AI 裁判
-- 订阅志愿者远端音频轨 → LiveKit audio frame 回调 → `SFSpeechRecognizer`
-  （`requiresOnDeviceRecognition=true`，locale zh-CN，demo 只做中文）。
-- 每个 final segment（或 5s 超时切段）POST `ai-referee`（CONTRACT §4.4）。
-- `warn` → 悬浮层顶部黄色提示条 5s;`freeze` → 冻结流程:
-  悬浮层变全屏半透明红 + 大字警告 + TTS 播报"检测到可疑请求，通话已暂停。
-  请勿告诉任何人您的密码或验证码"，同时 unpublish 音视频轨，
-  广播 `control.freeze`，POST `log-event`。老人点"是误报，继续"→ 恢复推流 +
-  `control.resume`。
-- 网络失败降级:本地关键词表直匹配（"验证码""密码""转账""汇款""礼品卡"
-  命中即 freeze）。
+### A6. 实时安全监听
+- 只能由老人主动点击“开始安全监听”开启；停止后必须关闭音频 renderer 和
+  AssemblyAI websocket，断线时 UI 明确显示未受保护。
+- 订阅志愿者远端音频轨，转成 16 kHz PCM16，通过后端短期 token 连接 AssemblyAI
+  Streaming；永久 `ASSEMBLYAI_API_KEY` 不进入客户端。
+- partial/final transcript 立即进入本地中英规则引擎；仅 warning/danger 显示大字警告、
+  POST `risk-event` 并通过 DataChannel 发送 `safety.risk`。同一 streaming turn 使用
+  8 秒 cooldown 去重，最近上下文只保留约 25 秒。
+- 第一版不逐句调用 LLM；`ai-referee` 只保留为旧版/手工测试接口。未来 AI context
+  analyzer 只能在规则判断可疑或未知时按需调用。
 
 ### A7. AI 引导模式
 - 菜单"AI 帮我":老人按住说话（SFSpeechRecognizer 转写任务描述）→
   取当前**打码后**帧转 JPEG（长边 ≤1568px）→ 采集焦点窗口 AX 树精简 JSON
   （role/title/frame，深度 ≤4，截断 8KB）→ POST `ai-guide`（CONTRACT §4.3）。
 - 响应:`target_rect` 非空则悬浮层画圈，`instruction_text` TTS 播报。单轮即可。
+- 本次实时安全 demo 默认关闭该可选入口，避免额外的语音识别权限和持续 AI 成本；
+  重新启用时必须恢复对应权限门和回归测试。
 
 ## Mock 与联调
 

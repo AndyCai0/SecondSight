@@ -2,7 +2,9 @@ import { strict as assert } from 'node:assert'
 import {
   collectAllAlerts,
   createAnthropicClient,
+  createAssemblyAIClient,
   createProductionDependencies,
+  createSupabaseServiceFetcher,
   readProductionConfig,
 } from '../functions/_shared/dependencies.ts'
 
@@ -14,6 +16,7 @@ Deno.test('production config reads the current hosted Supabase secret-key map', 
     LIVEKIT_API_SECRET: 'lk-secret',
     LIVEKIT_URL: 'wss://project.livekit.cloud',
     ANTHROPIC_API_KEY: 'anthropic-key',
+    ASSEMBLYAI_API_KEY: 'assemblyai-key',
   }
 
   assert.deepEqual(readProductionConfig((name) => values[name]), {
@@ -23,7 +26,65 @@ Deno.test('production config reads the current hosted Supabase secret-key map', 
     liveKitApiSecret: values.LIVEKIT_API_SECRET,
     liveKitUrl: values.LIVEKIT_URL,
     anthropicApiKey: values.ANTHROPIC_API_KEY,
+    assemblyAIApiKey: values.ASSEMBLYAI_API_KEY,
   })
+})
+
+Deno.test('hosted Supabase secret keys use apikey without an invalid bearer header', async () => {
+  let capturedHeaders = new Headers()
+  const fetcher = createSupabaseServiceFetcher('sb_secret_example', async (_input, init) => {
+    capturedHeaders = new Headers(init?.headers)
+    return Response.json([])
+  })
+
+  await fetcher('https://project.supabase.co/rest/v1/sessions', {
+    headers: {
+      apikey: 'sb_secret_example',
+      authorization: 'Bearer sb_secret_example',
+    },
+  })
+
+  assert.equal(capturedHeaders.get('apikey'), 'sb_secret_example')
+  assert.equal(capturedHeaders.has('authorization'), false)
+})
+
+Deno.test('legacy service-role JWT keeps its bearer header', async () => {
+  let capturedHeaders = new Headers()
+  const fetcher = createSupabaseServiceFetcher('legacy-service-role-jwt', async (_input, init) => {
+    capturedHeaders = new Headers(init?.headers)
+    return Response.json([])
+  })
+
+  await fetcher('https://project.supabase.co/rest/v1/sessions', {
+    headers: {
+      apikey: 'legacy-service-role-jwt',
+      authorization: 'Bearer legacy-service-role-jwt',
+    },
+  })
+
+  assert.equal(capturedHeaders.get('authorization'), 'Bearer legacy-service-role-jwt')
+})
+
+Deno.test('AssemblyAI adapter requests a bounded temporary streaming token server-side', async () => {
+  let capturedURL = ''
+  let capturedAuthorization = ''
+  const client = createAssemblyAIClient('server-only-key', async (input, init) => {
+    capturedURL = String(input)
+    capturedAuthorization = new Headers(init?.headers).get('authorization') ?? ''
+    return Response.json({ token: 'temporary-token', expires_in_seconds: 60 })
+  })
+
+  const credential = await client.createStreamingToken({
+    expiresInSeconds: 60,
+    maxSessionDurationSeconds: 3_600,
+  })
+
+  assert.equal(
+    capturedURL,
+    'https://streaming.assemblyai.com/v3/token?expires_in_seconds=60&max_session_duration_seconds=3600',
+  )
+  assert.equal(capturedAuthorization, 'server-only-key')
+  assert.deepEqual(credential, { token: 'temporary-token', expiresInSeconds: 60 })
 })
 
 Deno.test('Anthropic adapter uses the contract models and validates JSON output', async () => {
@@ -69,6 +130,7 @@ Deno.test('production LiveKit token contains a microphone-only volunteer grant',
     liveKitApiSecret: 'a-secret-long-enough-for-hmac-signing-1234567890',
     liveKitUrl: 'wss://project.livekit.cloud',
     anthropicApiKey: 'test-key',
+    assemblyAIApiKey: 'assemblyai-test-key',
   })
 
   const token = await dependencies.tokens.sign({
@@ -83,6 +145,18 @@ Deno.test('production LiveKit token contains a microphone-only volunteer grant',
   assert.equal(payload.sub, 'volunteer:小王')
   assert.equal(payload.video.room, '482913')
   assert.deepEqual(payload.video.canPublishSources, ['microphone'])
+
+  const elderToken = await dependencies.tokens.sign({
+    identity: 'elder',
+    room: '482913',
+    canPublish: true,
+    canSubscribe: true,
+  })
+  assert.deepEqual(await dependencies.elderCredentials.verify(elderToken), {
+    identity: 'elder',
+    room: '482913',
+  })
+  await assert.rejects(() => dependencies.elderCredentials.verify('not-a-valid-jwt'))
 })
 
 Deno.test('alert history pagination returns every record without a silent cap', async () => {

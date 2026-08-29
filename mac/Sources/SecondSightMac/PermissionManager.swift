@@ -9,20 +9,22 @@ import SwiftUI
 private struct PermissionPromptGuideView: View {
     var body: some View {
         VStack(spacing: 2) {
-            Text("点击这里")
-                .font(.system(size: 30, weight: .heavy))
-            Text("打开系统设置")
-                .font(.system(size: 22, weight: .bold))
-            Image(systemName: "arrow.down")
+            Image(systemName: "arrow.up")
                 .font(.system(size: 46, weight: .heavy))
                 .foregroundStyle(.orange)
+            VStack(spacing: 2) {
+                Text("点击这里")
+                    .font(.system(size: 30, weight: .heavy))
+                Text("打开系统设置")
+                    .font(.system(size: 22, weight: .bold))
+            }
+            .foregroundStyle(.black)
+            .padding(.horizontal, 22)
+            .padding(.vertical, 12)
+            .background(.yellow, in: RoundedRectangle(cornerRadius: 18))
+            .shadow(color: .black.opacity(0.35), radius: 10, y: 5)
         }
-        .foregroundStyle(.black)
-        .padding(.horizontal, 22)
-        .padding(.top, 14)
-        .background(.yellow, in: RoundedRectangle(cornerRadius: 18))
-        .shadow(color: .black.opacity(0.35), radius: 10, y: 5)
-        .padding(12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 }
 
@@ -106,10 +108,10 @@ private final class PermissionPromptGuideController {
             x: promptFrame.minX + promptFrame.width * 0.71,
             y: promptFrame.minY + promptFrame.height * 0.16
         )
-        let size = CGSize(width: 260, height: 150)
+        let size = CGSize(width: 280, height: 170)
         let frame = CGRect(
             x: target.x - size.width / 2,
-            y: target.y + 4,
+            y: target.y + 4 - size.height,
             width: size.width,
             height: size.height
         )

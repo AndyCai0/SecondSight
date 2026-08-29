@@ -60,7 +60,9 @@ final class AppModel: ObservableObject {
                 phase = machine.phase
                 statusMessage = "房间号码是 \(response.code)，正在等待对方加入"
                 overlay.show()
-                roomCodeWindow.show(code: response.code)
+                roomCodeWindow.show(code: response.code) { [weak self] in
+                    self?.endSession()
+                }
                 speech.speak("您的房间号码是，\(response.code.map(String.init).joined(separator: "，"))")
                 try await transport.connect(url: response.liveKitURL, token: response.liveKitToken)
                 try await capture.start()

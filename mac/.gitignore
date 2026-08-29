@@ -1,0 +1,4 @@
+.build/
+.swiftpm/
+SecondSightMac.app/
+Config.plist

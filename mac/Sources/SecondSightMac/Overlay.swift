@@ -1,0 +1,187 @@
+import AppKit
+import Combine
+import SecondSightCore
+import SwiftUI
+
+struct OverlayAnnotation: Identifiable, Equatable {
+    enum Shape: Equatable {
+        case circle(x: Double, y: Double, radius: Double)
+        case arrow(x1: Double, y1: Double, x2: Double, y2: Double)
+        case pointer(x: Double, y: Double)
+        case rectangle(NormalizedRect)
+    }
+
+    let id: String
+    let shape: Shape
+    let expiresAt: Date
+}
+
+@MainActor
+final class OverlayModel: ObservableObject {
+    @Published var annotations: [OverlayAnnotation] = []
+    @Published var warning: String?
+    @Published var frozenReason: String?
+    var onResume: (() -> Void)?
+    private var cleanupTimer: Timer?
+    private var warningTask: Task<Void, Never>?
+
+    init() {
+        cleanupTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.removeExpired() }
+        }
+    }
+
+    deinit {
+        cleanupTimer?.invalidate()
+        warningTask?.cancel()
+    }
+
+    func handle(_ message: DataMessage) {
+        let now = Date()
+        switch message {
+        case let .circle(id, x, y, radius, ttl):
+            upsert(OverlayAnnotation(id: id, shape: .circle(x: x, y: y, radius: radius), expiresAt: now.addingTimeInterval(Double(ttl) / 1_000)))
+        case let .arrow(id, x1, y1, x2, y2, ttl):
+            upsert(OverlayAnnotation(id: id, shape: .arrow(x1: x1, y1: y1, x2: x2, y2: y2), expiresAt: now.addingTimeInterval(Double(ttl) / 1_000)))
+        case let .pointer(x, y):
+            upsert(OverlayAnnotation(id: "pointer", shape: .pointer(x: x, y: y), expiresAt: now.addingTimeInterval(0.35)))
+        case .clear:
+            annotations.removeAll()
+        case .freeze, .resume, .textToSpeech:
+            break
+        }
+    }
+
+    func guide(rect: NormalizedRect, ttl: TimeInterval = 8) {
+        upsert(OverlayAnnotation(id: "ai-guide", shape: .rectangle(rect), expiresAt: Date().addingTimeInterval(ttl)))
+    }
+
+    func showWarning(_ text: String) {
+        warningTask?.cancel()
+        warning = text
+        warningTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(5))
+            guard !Task.isCancelled else { return }
+            await MainActor.run { self?.warning = nil }
+        }
+    }
+
+    func freeze(reason: String) { frozenReason = reason }
+    func resume() { frozenReason = nil }
+
+    private func upsert(_ item: OverlayAnnotation) {
+        annotations.removeAll { $0.id == item.id }
+        annotations.append(item)
+    }
+
+    private func removeExpired() {
+        let now = Date()
+        annotations.removeAll { $0.expiresAt <= now }
+    }
+}
+
+struct OverlayView: View {
+    @ObservedObject var model: OverlayModel
+
+    var body: some View {
+        ZStack {
+            TimelineView(.animation) { context in
+                Canvas { graphics, size in
+                    drawAnnotations(graphics: &graphics, size: size, time: context.date)
+                }
+            }
+            if let warning = model.warning {
+                VStack {
+                    Text(warning)
+                        .font(.system(size: 28, weight: .bold))
+                        .foregroundStyle(.black)
+                        .padding(.horizontal, 32)
+                        .padding(.vertical, 20)
+                        .background(.yellow, in: RoundedRectangle(cornerRadius: 18))
+                        .shadow(radius: 12)
+                    Spacer()
+                }
+                .padding(.top, 48)
+            }
+            if let reason = model.frozenReason {
+                VStack(spacing: 32) {
+                    Image(systemName: "exclamationmark.shield.fill")
+                        .font(.system(size: 88))
+                    Text("检测到可疑请求，通话已暂停")
+                        .font(.system(size: 42, weight: .heavy))
+                    Text("请勿告诉任何人您的密码或验证码")
+                        .font(.system(size: 32, weight: .bold))
+                    Text(reason)
+                        .font(.system(size: 24))
+                    Button("是误报，继续通话") { model.onResume?() }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+                        .font(.system(size: 26, weight: .bold))
+                }
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.red.opacity(0.86))
+            }
+        }
+        .background(.clear)
+    }
+
+    private func drawAnnotations(graphics: inout GraphicsContext, size: CGSize, time: Date) {
+        let pulse = 1 + 0.08 * sin(time.timeIntervalSinceReferenceDate * 5)
+        for item in model.annotations {
+            switch item.shape {
+            case let .circle(x, y, radius):
+                let center = CGPoint(x: x * size.width, y: y * size.height)
+                let r = radius * min(size.width, size.height) * pulse
+                graphics.stroke(Path(ellipseIn: CGRect(x: center.x - r, y: center.y - r, width: r * 2, height: r * 2)), with: .color(.orange), lineWidth: 9)
+            case let .arrow(x1, y1, x2, y2):
+                let start = CGPoint(x: x1 * size.width, y: y1 * size.height)
+                let end = CGPoint(x: x2 * size.width, y: y2 * size.height)
+                var path = Path(); path.move(to: start); path.addLine(to: end)
+                let angle = atan2(end.y - start.y, end.x - start.x)
+                for delta in [Double.pi * 0.82, -Double.pi * 0.82] {
+                    path.move(to: end)
+                    path.addLine(to: CGPoint(x: end.x + 28 * cos(angle + delta), y: end.y + 28 * sin(angle + delta)))
+                }
+                graphics.stroke(path, with: .color(.orange), style: StrokeStyle(lineWidth: 9, lineCap: .round, lineJoin: .round))
+            case let .pointer(x, y):
+                let center = CGPoint(x: x * size.width, y: y * size.height)
+                graphics.fill(Path(ellipseIn: CGRect(x: center.x - 12, y: center.y - 12, width: 24, height: 24)), with: .color(.red))
+            case let .rectangle(rect):
+                let box = CGRect(x: rect.x * size.width, y: rect.y * size.height, width: rect.width * size.width, height: rect.height * size.height)
+                graphics.stroke(Path(roundedRect: box.insetBy(dx: -8, dy: -8), cornerRadius: 14), with: .color(.cyan), lineWidth: 9)
+            }
+        }
+    }
+}
+
+@MainActor
+final class OverlayWindowController {
+    let model = OverlayModel()
+    private var window: NSWindow?
+
+    func show() {
+        guard window == nil, let screen = NSScreen.main else { return }
+        let window = NSWindow(contentRect: screen.frame, styleMask: .borderless, backing: .buffered, defer: false)
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.hasShadow = false
+        window.level = .screenSaver
+        window.ignoresMouseEvents = true
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        window.contentView = NSHostingView(rootView: OverlayView(model: model))
+        window.orderFrontRegardless()
+        self.window = window
+    }
+
+    func setFrozen(_ frozen: Bool) {
+        show()
+        window?.ignoresMouseEvents = !frozen
+        if frozen { window?.makeKeyAndOrderFront(nil) }
+    }
+
+    func close() {
+        window?.close()
+        window = nil
+    }
+}

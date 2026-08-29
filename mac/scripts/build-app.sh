@@ -1,0 +1,44 @@
+#!/bin/zsh
+set -euo pipefail
+
+script_dir="${0:A:h}"
+package_dir="${script_dir:h}"
+bundle_path="${package_dir}/SecondSightMac.app"
+contents_path="${bundle_path}/Contents"
+macos_path="${contents_path}/MacOS"
+frameworks_path="${contents_path}/Frameworks"
+resources_path="${contents_path}/Resources"
+
+cd "$package_dir"
+swift build -c release --product SecondSightMac
+
+if [[ "$bundle_path" != "$package_dir/SecondSightMac.app" ]]; then
+  print -u2 "Refusing unexpected bundle path: $bundle_path"
+  exit 2
+fi
+rm -rf "$bundle_path"
+mkdir -p "$macos_path" "$frameworks_path" "$resources_path"
+
+cp ".build/release/SecondSightMac" "$macos_path/SecondSightMac"
+cp "Resources/Info.plist" "$contents_path/Info.plist"
+if [[ -f "Config.plist" ]]; then
+  cp "Config.plist" "$resources_path/Config.plist"
+else
+  cp "Config.template.plist" "$resources_path/Config.plist"
+fi
+
+cp -R ".build/artifacts/webrtc-xcframework/LiveKitWebRTC/LiveKitWebRTC.xcframework/macos-arm64_x86_64/LiveKitWebRTC.framework" "$frameworks_path/"
+cp -R ".build/artifacts/livekit-uniffi-xcframework/RustLiveKitUniFFI/RustLiveKitUniFFI.xcframework/macos-arm64_x86_64/RustLiveKitUniFFI.framework" "$frameworks_path/"
+
+if ! otool -l "$macos_path/SecondSightMac" | grep -q '@executable_path/../Frameworks'; then
+  install_name_tool -add_rpath '@executable_path/../Frameworks' "$macos_path/SecondSightMac"
+fi
+
+plutil -lint "$contents_path/Info.plist" "$resources_path/Config.plist"
+codesign --force --sign - --timestamp=none "$frameworks_path/LiveKitWebRTC.framework"
+codesign --force --sign - --timestamp=none "$frameworks_path/RustLiveKitUniFFI.framework"
+codesign --force --sign - --timestamp=none "$macos_path/SecondSightMac"
+codesign --force --deep --sign - --timestamp=none "$bundle_path"
+codesign --verify --deep --strict --verbose=2 "$bundle_path"
+
+print "$bundle_path"

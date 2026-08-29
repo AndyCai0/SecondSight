@@ -45,7 +45,7 @@ cp Config.template.plist Config.plist
 ## 模块与 TASK A 对应关系
 
 - A1：`AppModel` + `SecondSightApp` 的 `idle → requesting → waiting → connected → frozen → ended` 状态机；SwiftUI 菜单栏、全屏 6 位房间码和中文 TTS。
-- A2：`PermissionManager` + 主页权限卡片实时检查屏幕录制、辅助功能、麦克风、语音识别，并可直接请求授权或跳转对应系统设置。
+- A2：`PermissionManager` + 主页权限卡片实时检查屏幕录制、辅助功能、麦克风、语音识别；系统提示出现时用不拦截点击的浮动箭头指向“打开系统设置”，并可直接跳转对应权限页面。
 - A3：`ScreenCaptureService` 用 ScreenCaptureKit 采主显示器 12fps，按 bundle id 排除本 App 窗口；`LiveKitTransport` 使用 `BufferCapturer` 发布自定义屏幕轨和麦克风轨。
 - A4：`AccessibilityScanner` 5Hz 扫描 secure text field/敏感标题；`FrameRedactor` 先复制帧，再按 Retina 比例覆盖黑块；Secure Event Input 无定位矩形时整屏替换为安全占位图。
 - A5：`OverlayWindowController` 是必要的薄 AppKit 窗口桥接，内容由 SwiftUI `OverlayView` 渲染圆圈、箭头、pointer、TTL 和 clear。`DataMessageCodec` 在解析边界拒绝 `volunteer:*` 的全部 `control.*`。

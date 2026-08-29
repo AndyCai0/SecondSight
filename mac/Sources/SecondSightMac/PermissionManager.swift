@@ -4,6 +4,196 @@ import AVFoundation
 import Combine
 import CoreGraphics
 import Speech
+import SwiftUI
+
+private struct PermissionPromptGuideView: View {
+    var body: some View {
+        VStack(spacing: 2) {
+            Text("点击这里")
+                .font(.system(size: 30, weight: .heavy))
+            Text("打开系统设置")
+                .font(.system(size: 22, weight: .bold))
+            Image(systemName: "arrow.down")
+                .font(.system(size: 46, weight: .heavy))
+                .foregroundStyle(.orange)
+        }
+        .foregroundStyle(.black)
+        .padding(.horizontal, 22)
+        .padding(.top, 14)
+        .background(.yellow, in: RoundedRectangle(cornerRadius: 18))
+        .shadow(color: .black.opacity(0.35), radius: 10, y: 5)
+        .padding(12)
+    }
+}
+
+@MainActor
+private final class PermissionPromptGuideController {
+    struct Context {
+        let existingWindowIDs: Set<CGWindowID>
+        let anchorFrame: CGRect
+        let displayID: CGDirectDisplayID
+    }
+
+    private var panel: NSPanel?
+    private var watchTask: Task<Void, Never>?
+    private var hideTask: Task<Void, Never>?
+    private var workspaceObserver: NSObjectProtocol?
+
+    init() {
+        workspaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+                  app.bundleIdentifier == "com.apple.systempreferences"
+            else { return }
+            Task { @MainActor in self?.hide() }
+        }
+    }
+
+    deinit {
+        watchTask?.cancel()
+        hideTask?.cancel()
+        if let workspaceObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(workspaceObserver)
+        }
+    }
+
+    func makeContext() -> Context? {
+        guard let screen = NSApp.keyWindow?.screen ?? NSApp.mainWindow?.screen ?? NSScreen.main,
+              let displayID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID
+        else { return nil }
+
+        let anchorFrame = NSApp.keyWindow?.frame ?? NSApp.mainWindow?.frame ?? screen.visibleFrame
+        return Context(
+            existingWindowIDs: visibleWindowIDs(),
+            anchorFrame: anchorFrame,
+            displayID: displayID
+        )
+    }
+
+    func showWhenPromptAppears(using context: Context?) {
+        guard let context else { return }
+        hide()
+        watchTask = Task { [weak self] in
+            for _ in 0..<12 {
+                guard !Task.isCancelled else { return }
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                guard let self else { return }
+                if let promptFrame = self.findPromptFrame(using: context) {
+                    self.showPanel(pointingInto: promptFrame)
+                    return
+                }
+            }
+        }
+    }
+
+    func hide() {
+        watchTask?.cancel()
+        watchTask = nil
+        hideTask?.cancel()
+        hideTask = nil
+        panel?.orderOut(nil)
+        panel?.close()
+        panel = nil
+    }
+
+    private func showPanel(pointingInto promptFrame: CGRect) {
+        panel?.close()
+
+        let target = CGPoint(
+            x: promptFrame.minX + promptFrame.width * 0.71,
+            y: promptFrame.minY + promptFrame.height * 0.16
+        )
+        let size = CGSize(width: 260, height: 150)
+        let frame = CGRect(
+            x: target.x - size.width / 2,
+            y: target.y + 4,
+            width: size.width,
+            height: size.height
+        )
+        let panel = NSPanel(
+            contentRect: frame,
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = false
+        panel.level = .screenSaver
+        panel.ignoresMouseEvents = true
+        panel.hidesOnDeactivate = false
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        panel.contentView = NSHostingView(rootView: PermissionPromptGuideView())
+        panel.orderFrontRegardless()
+        self.panel = panel
+
+        hideTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 14_000_000_000)
+            guard !Task.isCancelled else { return }
+            self?.hide()
+        }
+    }
+
+    private func findPromptFrame(using context: Context) -> CGRect? {
+        guard let items = CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly, .excludeDesktopElements],
+            kCGNullWindowID
+        ) as? [[String: Any]] else { return nil }
+
+        return items.compactMap { item -> CGRect? in
+            guard let number = item[kCGWindowNumber as String] as? NSNumber,
+                  !context.existingWindowIDs.contains(number.uint32Value),
+                  (item[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
+                  let bounds = item[kCGWindowBounds as String] as? NSDictionary,
+                  let cgFrame = CGRect(dictionaryRepresentation: bounds),
+                  (320...760).contains(cgFrame.width),
+                  (120...360).contains(cgFrame.height),
+                  let frame = appKitFrame(from: cgFrame, displayID: context.displayID),
+                  frame.intersects(context.anchorFrame.insetBy(dx: -240, dy: -240))
+            else { return nil }
+            return frame
+        }
+        .min { lhs, rhs in
+            distance(lhs.center, context.anchorFrame.center) < distance(rhs.center, context.anchorFrame.center)
+        }
+    }
+
+    private func visibleWindowIDs() -> Set<CGWindowID> {
+        guard let items = CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly, .excludeDesktopElements],
+            kCGNullWindowID
+        ) as? [[String: Any]] else { return [] }
+        return Set(items.compactMap {
+            ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value
+        })
+    }
+
+    private func appKitFrame(from cgFrame: CGRect, displayID: CGDirectDisplayID) -> CGRect? {
+        guard let screen = NSScreen.screens.first(where: {
+            ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID) == displayID
+        }) else { return nil }
+
+        let displayBounds = CGDisplayBounds(displayID)
+        guard displayBounds.intersects(cgFrame) else { return nil }
+        return CGRect(
+            x: screen.frame.minX + cgFrame.minX - displayBounds.minX,
+            y: screen.frame.maxY - (cgFrame.minY - displayBounds.minY) - cgFrame.height,
+            width: cgFrame.width,
+            height: cgFrame.height
+        )
+    }
+
+    private func distance(_ lhs: CGPoint, _ rhs: CGPoint) -> CGFloat {
+        hypot(lhs.x - rhs.x, lhs.y - rhs.y)
+    }
+}
+
+private extension CGRect {
+    var center: CGPoint { CGPoint(x: midX, y: midY) }
+}
 
 @MainActor
 final class PermissionManager: ObservableObject {
@@ -43,6 +233,7 @@ final class PermissionManager: ObservableObject {
     @Published private(set) var statuses: [Kind: Status] = [:]
     @Published private(set) var screenRestartRequired = false
     private let screenWasAuthorizedAtLaunch: Bool
+    private let promptGuide = PermissionPromptGuideController()
     private var timer: Timer?
 
     init() {
@@ -76,11 +267,15 @@ final class PermissionManager: ObservableObject {
     func request(_ kind: Kind) {
         switch kind {
         case .screen:
+            let context = promptGuide.makeContext()
             _ = CGRequestScreenCaptureAccess()
+            promptGuide.showWhenPromptAppears(using: context)
             refresh()
         case .accessibility:
+            let context = promptGuide.makeContext()
             let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
             _ = AXIsProcessTrustedWithOptions(options)
+            promptGuide.showWhenPromptAppears(using: context)
             refresh()
         case .microphone:
             Task {
@@ -95,6 +290,7 @@ final class PermissionManager: ObservableObject {
     }
 
     func openSettings(_ kind: Kind) {
+        promptGuide.hide()
         guard let url = kind.systemSettingsURL else { return }
         NSWorkspace.shared.open(url)
     }

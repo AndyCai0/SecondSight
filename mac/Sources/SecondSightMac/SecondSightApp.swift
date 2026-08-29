@@ -207,7 +207,7 @@ struct PermissionChecklist: View {
                 }
                 .buttonStyle(.borderedProminent)
             } else {
-                Text("先点下面的蓝色按钮。系统询问时，请点“允许”。")
+                Text(requestInstruction(for: kind))
                     .font(.system(size: 23, weight: .semibold))
                     .fixedSize(horizontal: false, vertical: true)
                 Button("开始设置\(kind.rawValue)") {
@@ -222,6 +222,15 @@ struct PermissionChecklist: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
         .background(.blue.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func requestInstruction(for kind: PermissionManager.Kind) -> String {
+        switch kind {
+        case .screen, .accessibility:
+            "先点下面的蓝色按钮。系统弹出提示后，请按箭头点击“打开系统设置”。"
+        case .microphone, .speech:
+            "先点下面的蓝色按钮。系统询问时，请点“允许”。"
+        }
     }
 
     private func completedRow(_ kind: PermissionManager.Kind) -> some View {

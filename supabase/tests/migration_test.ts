@@ -13,3 +13,14 @@ Deno.test('initial migration creates the contract tables with deny-by-default RL
   assert.match(sql, /code text not null unique/i)
   assert.match(sql, /references sessions\s*\(id\)/i)
 })
+
+Deno.test('automatic RLS helper is not exposed through the Data API', async () => {
+  const sql = await Deno.readTextFile(
+    new URL('../migrations/20260829084356_secure_auto_rls_trigger.sql', import.meta.url),
+  )
+
+  assert.match(
+    sql,
+    /revoke\s+execute\s+on\s+function\s+public\.rls_auto_enable\(\)\s+from\s+public,\s*anon,\s*authenticated/i,
+  )
+})

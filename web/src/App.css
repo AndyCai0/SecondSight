@@ -366,7 +366,7 @@
   line-height: 1.5;
 }
 
-.microphone-note {
+.media-permission-note {
   margin: 18px 0 0;
   color: #79928c;
   font-size: 12px;
@@ -446,6 +446,54 @@
 
 .leave-button {
   padding: 10px 15px;
+}
+
+.volunteer-camera-card {
+  width: min(330px, 100%);
+  margin: 0 0 20px auto;
+  padding: 10px;
+  display: grid;
+  grid-template-columns: 128px 1fr;
+  gap: 12px;
+  align-items: center;
+  border: 1px solid rgba(111, 226, 192, 0.28);
+  border-radius: 14px;
+  background: rgba(16, 35, 32, 0.84);
+}
+
+.volunteer-camera-card video {
+  width: 128px;
+  aspect-ratio: 16 / 9;
+  border-radius: 9px;
+  object-fit: cover;
+  transform: scaleX(-1);
+  background: #050c0b;
+}
+
+.volunteer-camera-card strong,
+.volunteer-camera-card small {
+  display: block;
+}
+
+.volunteer-camera-card strong {
+  color: #dff8f0;
+  font-size: 13px;
+}
+
+.volunteer-camera-card strong i {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 4px;
+  border-radius: 50%;
+  background: var(--mint);
+  box-shadow: 0 0 10px rgba(111, 226, 192, 0.8);
+}
+
+.volunteer-camera-card small {
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 11px;
 }
 
 .session-media-grid {
@@ -740,16 +788,6 @@
   cursor: pointer;
 }
 
-@media (max-width: 760px) {
-  .safety-risk-card {
-    grid-template-columns: auto 1fr;
-  }
-
-  .safety-risk-card button {
-    grid-column: 1 / -1;
-  }
-}
-
 .session-footer p {
   margin: 0;
 }
@@ -830,5 +868,65 @@
 
   .camera-panel {
     width: min(440px, 100%);
+  }
+}
+
+@media (max-width: 760px) {
+  .site-header {
+    height: auto;
+    min-height: 74px;
+    padding: 14px 5vw;
+  }
+
+  .safety-promise {
+    display: none;
+  }
+
+  .join-layout {
+    width: min(92vw, 560px);
+    grid-template-columns: 1fr;
+    gap: 36px;
+    padding: 42px 0;
+  }
+
+  .join-copy h1 {
+    font-size: 42px;
+  }
+
+  .join-card {
+    padding: 26px;
+  }
+
+  .broadcast-card,
+  .session-heading,
+  .session-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .session-heading {
+    gap: 18px;
+  }
+
+  .volunteer-camera-card,
+  .camera-panel {
+    width: 100%;
+  }
+
+  .annotation-toolbar {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .annotation-toolbar button {
+    min-width: 0;
+  }
+
+  .safety-risk-card {
+    grid-template-columns: auto 1fr;
+  }
+
+  .safety-risk-card button {
+    grid-column: 1 / -1;
   }
 }

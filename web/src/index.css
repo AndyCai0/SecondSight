@@ -21,13 +21,13 @@
 }
 
 html {
-  min-width: 900px;
+  min-width: 320px;
   background: #081513;
 }
 
 body {
   margin: 0;
-  min-width: 900px;
+  min-width: 320px;
   min-height: 100vh;
   background: radial-gradient(circle at 9% 11%, rgba(42, 111, 93, 0.17), transparent 33rem), #081513;
 }

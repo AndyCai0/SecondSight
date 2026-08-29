@@ -1,8 +1,10 @@
 import {
+  createLocalTracks,
   Room,
   RoomEvent,
   Track,
   type LocalParticipant,
+  type LocalTrack,
   type RemoteTrack,
 } from 'livekit-client'
 import type { JoinedSession } from './api'
@@ -32,16 +34,47 @@ export interface VolunteerSession {
     cameraVideo: HTMLVideoElement,
     audio: HTMLAudioElement,
   ): void
+  attachLocalCamera(video: HTMLVideoElement): void
   send(message: VolunteerOutboundMessage): Promise<void>
   disconnect(): Promise<void>
 }
 
+export interface PreparedVolunteerMedia {
+  camera: LocalTrack
+  microphone: LocalTrack
+  stop(): void
+}
+
+export type AcquireVolunteerMedia = () => Promise<PreparedVolunteerMedia>
+
 export type ConnectVolunteerSession = (
   joined: JoinedSession,
   events: LiveSessionEvents,
+  media: PreparedVolunteerMedia,
 ) => Promise<VolunteerSession>
 
 export type ElderVideoKind = 'screen' | 'camera'
+
+export const acquireVolunteerMedia: AcquireVolunteerMedia = async () => {
+  const tracks = await createLocalTracks({ audio: true, video: true })
+  const camera = tracks.find((track) => track.kind === Track.Kind.Video)
+  const microphone = tracks.find((track) => track.kind === Track.Kind.Audio)
+  if (!camera || !microphone) {
+    tracks.forEach((track) => track.stop())
+    throw new Error('Camera and microphone tracks are required')
+  }
+
+  let stopped = false
+  return {
+    camera,
+    microphone,
+    stop() {
+      if (stopped) return
+      stopped = true
+      tracks.forEach((track) => track.stop())
+    },
+  }
+}
 
 export function elderVideoKind(
   track: Pick<RemoteTrack, 'kind' | 'source'>,
@@ -75,11 +108,19 @@ export function dispatchElderMessage(payload: Uint8Array, events: LiveSessionEve
   if (message.type === 'safety.risk') events.onRisk(message)
 }
 
-export const connectVolunteerSession: ConnectVolunteerSession = async (joined, events) => {
+export const connectVolunteerSession: ConnectVolunteerSession = async (joined, events, media) => {
   const room = new Room({ adaptiveStream: true, dynacast: true })
   let screenVideoElement: HTMLVideoElement | null = null
   let cameraVideoElement: HTMLVideoElement | null = null
   let audioElement: HTMLAudioElement | null = null
+  let localCameraTrack: LocalTrack | null = null
+  let localMediaStopped = false
+
+  function stopLocalMedia(): void {
+    if (localMediaStopped) return
+    localMediaStopped = true
+    media.stop()
+  }
 
   function attachTrack(track: RemoteTrack, trackName?: string): void {
     const videoKind = elderVideoKind(track, trackName)
@@ -133,12 +174,22 @@ export const connectVolunteerSession: ConnectVolunteerSession = async (joined, e
 
   try {
     await room.connect(joined.liveKitUrl, joined.liveKitToken)
-    await Promise.all([
-      room.localParticipant.setMicrophoneEnabled(true),
-      room.localParticipant.setCameraEnabled(true),
-    ])
+    const cameraPublication = await room.localParticipant.publishTrack(media.camera, {
+      source: Track.Source.Camera,
+    })
+    if (!cameraPublication.track) throw new Error('Camera track was not published')
+    localCameraTrack = cameraPublication.track
+    const microphonePublication = await room.localParticipant.publishTrack(media.microphone, {
+      source: Track.Source.Microphone,
+    })
+    if (!microphonePublication.track) throw new Error('Microphone track was not published')
   } catch (error) {
-    await room.disconnect()
+    stopLocalMedia()
+    try {
+      await room.disconnect(true)
+    } catch {
+      // Preserve the connection/publication error while still stopping local capture.
+    }
     throw error
   }
 
@@ -149,14 +200,22 @@ export const connectVolunteerSession: ConnectVolunteerSession = async (joined, e
       audioElement = audio
       attachElderTracks()
     },
+    attachLocalCamera(video) {
+      localCameraTrack?.attach(video)
+    },
     send(message) {
       return publishContractMessage(
         room.localParticipant as Pick<LocalParticipant, 'publishData'>,
         message,
       )
     },
-    disconnect() {
-      return room.disconnect()
+    async disconnect() {
+      stopLocalMedia()
+      try {
+        await room.disconnect(true)
+      } finally {
+        stopLocalMedia()
+      }
     },
   }
 }

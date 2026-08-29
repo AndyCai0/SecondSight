@@ -89,7 +89,7 @@ export function createSecondSightApi(options: ApiOptions): SecondSightApi {
     if (!response.ok) {
       const message = isRecord(payload) && typeof payload.error === 'string'
         ? payload.error
-        : '请求失败，请稍后重试'
+        : 'The request failed. Please try again shortly.'
       throw new ApiError(message, response.status)
     }
     return payload
@@ -102,7 +102,7 @@ export function createSecondSightApi(options: ApiOptions): SecondSightApi {
         !isRecord(payload) || typeof payload.session_id !== 'string' ||
         typeof payload.lk_url !== 'string' || typeof payload.lk_token !== 'string'
       ) {
-        throw new ApiError('服务返回了无法识别的数据', 502)
+        throw new ApiError('The service returned an invalid response.', 502)
       }
       return {
         sessionId: payload.session_id,
@@ -117,7 +117,7 @@ export function createSecondSightApi(options: ApiOptions): SecondSightApi {
         typeof payload.code !== 'string' || typeof payload.lk_url !== 'string' ||
         typeof payload.lk_token !== 'string'
       ) {
-        throw new ApiError('服务返回了无法识别的数据', 502)
+        throw new ApiError('The service returned an invalid response.', 502)
       }
       return {
         sessionId: payload.session_id,
@@ -134,13 +134,13 @@ export function createSecondSightApi(options: ApiOptions): SecondSightApi {
         payload: input.payload,
       })
       if (!isRecord(payload) || payload.ok !== true) {
-        throw new ApiError('审计事件未被服务确认', 502)
+        throw new ApiError('The service did not confirm the audit event.', 502)
       }
     },
     async listAlerts(sessionId) {
       const payload = await request('list-alerts', { session_id: sessionId })
       if (!isRecord(payload) || !Array.isArray(payload.alerts)) {
-        throw new ApiError('告警记录格式无效', 502)
+        throw new ApiError('The alert record has an invalid format.', 502)
       }
       return payload.alerts.map(parseAlert)
     },
@@ -150,7 +150,7 @@ export function createSecondSightApi(options: ApiOptions): SecondSightApi {
         name: input.name,
       })
       if (!isRecord(payload) || !Array.isArray(payload.broadcasts)) {
-        throw new ApiError('求助广播格式无效', 502)
+        throw new ApiError('The help request has an invalid format.', 502)
       }
       return payload.broadcasts.map(parseHelpBroadcast)
     },
@@ -164,7 +164,7 @@ export function createSecondSightApi(options: ApiOptions): SecondSightApi {
         !isRecord(payload) || typeof payload.session_id !== 'string' ||
         typeof payload.lk_url !== 'string' || typeof payload.lk_token !== 'string'
       ) {
-        throw new ApiError('服务返回了无法识别的数据', 502)
+        throw new ApiError('The service returned an invalid response.', 502)
       }
       return {
         sessionId: payload.session_id,
@@ -180,7 +180,7 @@ function parseHelpBroadcast(value: unknown): HelpBroadcast {
     !isRecord(value) || typeof value.session_id !== 'string' ||
     typeof value.requested_at !== 'string' || typeof value.elder_label !== 'string'
   ) {
-    throw new ApiError('求助广播格式无效', 502)
+    throw new ApiError('The help request has an invalid format.', 502)
   }
   return {
     sessionId: value.session_id,
@@ -195,7 +195,7 @@ function parseAlert(value: unknown): AlertRecord {
     !['warn', 'freeze'].includes(String(value.severity)) ||
     typeof value.transcript !== 'string' || typeof value.reason !== 'string'
   ) {
-    throw new ApiError('告警记录格式无效', 502)
+    throw new ApiError('The alert record has an invalid format.', 502)
   }
   return {
     id: value.id,

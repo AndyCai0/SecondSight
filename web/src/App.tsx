@@ -9,8 +9,11 @@ import {
 } from './api'
 import type { SafetyRiskMessage, VolunteerOutboundMessage } from './contracts'
 import {
+  acquireVolunteerMedia,
   connectVolunteerSession,
+  type AcquireVolunteerMedia,
   type ConnectVolunteerSession,
+  type PreparedVolunteerMedia,
   type VolunteerSession,
 } from './transport'
 import './App.css'
@@ -26,10 +29,15 @@ type ReceiverStatus = 'connecting' | 'receiving' | 'reconnecting' | 'unavailable
 
 interface AppProps {
   api?: SecondSightApi
+  acquireMedia?: AcquireVolunteerMedia
   connectSession?: ConnectVolunteerSession
 }
 
-function App({ api, connectSession = connectVolunteerSession }: AppProps) {
+function App({
+  api,
+  acquireMedia = acquireVolunteerMedia,
+  connectSession = connectVolunteerSession,
+}: AppProps) {
   const environment = import.meta.env
   const configuredApi = useMemo(() => api ?? createSecondSightApi({
     supabaseUrl: environment.VITE_SUPABASE_URL ?? '',
@@ -56,8 +64,10 @@ function App({ api, connectSession = connectVolunteerSession }: AppProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const cameraRef = useRef<HTMLVideoElement>(null)
   const audioRef = useRef<HTMLAudioElement>(null)
+  const localCameraRef = useRef<HTMLVideoElement>(null)
   const currentSession = useRef<VolunteerSession | null>(null)
   const manualDisconnect = useRef(false)
+  const entryInFlight = useRef(false)
   const nameRef = useRef(name)
   const assistantId = useMemo(() => resolveAssistantId(), [])
 
@@ -75,7 +85,7 @@ function App({ api, connectSession = connectVolunteerSession }: AppProps) {
       try {
         const records = await configuredApi.pollBroadcasts({
           assistantId,
-          name: nameRef.current.trim() || '待命助手',
+          name: nameRef.current.trim() || 'Available Volunteer',
         })
         if (cancelled) return
         setBroadcasts(records)
@@ -96,73 +106,92 @@ function App({ api, connectSession = connectVolunteerSession }: AppProps) {
   }, [active, assistantId, broadcastConfigured, configuredApi])
 
   useEffect(() => {
-    if (active && videoRef.current && cameraRef.current && audioRef.current) {
+    if (
+      active && videoRef.current && cameraRef.current && audioRef.current &&
+      localCameraRef.current
+    ) {
       active.live.attachMedia(videoRef.current, cameraRef.current, audioRef.current)
+      active.live.attachLocalCamera(localCameraRef.current)
     }
   }, [active])
 
   useEffect(() => () => {
     manualDisconnect.current = true
-    void currentSession.current?.disconnect()
+    const session = currentSession.current
+    currentSession.current = null
+    void session?.disconnect().catch(() => undefined)
   }, [])
 
   async function handleJoin(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault()
+    if (entryInFlight.current) return
     setError('')
     if (!/^\d{6}$/.test(code)) {
-      setError('请输入 6 位数字房间码')
+      setError('Enter the 6-digit room code.')
       return
     }
     if (!name.trim()) {
-      setError('请输入你的昵称')
+      setError('Enter your display name.')
       return
     }
     if (!api && (!environment.VITE_SUPABASE_URL || !environment.VITE_SUPABASE_ANON_KEY)) {
-      setError('服务尚未配置，请先设置 Supabase 公共环境变量')
+      setError('The service is not configured. Set the public Supabase environment variables first.')
       return
     }
 
+    entryInFlight.current = true
     setJoining(true)
     setHasScreenMedia(false)
     setHasCameraMedia(false)
     setAuditFailed(false)
     setSafetyRisk(null)
     manualDisconnect.current = false
+    let media: PreparedVolunteerMedia | null = null
     try {
+      media = await acquireMedia()
       const joined = await configuredApi.joinSession({ code, name: name.trim() })
-      await activateSession(joined, `房间 ${code}`, name.trim())
+      await activateSession(joined, `Room ${code}`, name.trim(), media)
+      media = null
     } catch (cause) {
+      media?.stop()
       setError(joinFailureMessage(cause))
     } finally {
+      entryInFlight.current = false
       setJoining(false)
     }
   }
 
   async function claimBroadcast(broadcast: HelpBroadcast): Promise<void> {
+    if (entryInFlight.current) return
     const volunteerName = name.trim()
     setError('')
     if (!volunteerName) {
-      setError('请先输入你的昵称，再响应求助')
+      setError('Enter your display name before responding to a request.')
       return
     }
-    if (claimingSessionId) return
 
+    entryInFlight.current = true
     setClaimingSessionId(broadcast.sessionId)
     setHasScreenMedia(false)
     setHasCameraMedia(false)
     setAuditFailed(false)
     setSafetyRisk(null)
     manualDisconnect.current = false
+    let media: PreparedVolunteerMedia | null = null
     try {
+      media = await acquireMedia()
       const joined = await configuredApi.claimBroadcast({
         sessionId: broadcast.sessionId,
         assistantId,
         name: volunteerName,
       })
-      await activateSession(joined, '在线求助已接通', volunteerName)
+      await activateSession(joined, 'Live help request', volunteerName, media)
+      media = null
     } catch (cause) {
+      media?.stop()
       setError(claimFailureMessage(cause))
     } finally {
+      entryInFlight.current = false
       setClaimingSessionId(null)
     }
   }
@@ -171,6 +200,7 @@ function App({ api, connectSession = connectVolunteerSession }: AppProps) {
     joined: JoinedSession,
     contextLabel: string,
     volunteerName: string,
+    media: PreparedVolunteerMedia,
   ): Promise<void> {
     const live = await connectSession(joined, {
       onFreeze: (reason) => setFrozenReason(reason),
@@ -179,14 +209,14 @@ function App({ api, connectSession = connectVolunteerSession }: AppProps) {
         if (manualDisconnect.current) return
         currentSession.current = null
         setActive(null)
-        setError('连接已断开，请重新进入房间')
+        setError('The connection was interrupted. Rejoin the room to continue.')
       },
       onMediaChanged: (kind, isAvailable) => {
         if (kind === 'screen') setHasScreenMedia(isAvailable)
         if (kind === 'camera') setHasCameraMedia(isAvailable)
       },
       onRisk: setSafetyRisk,
-    })
+    }, media)
     currentSession.current = live
     setActive({ joined, live, contextLabel, volunteerName })
   }
@@ -194,13 +224,22 @@ function App({ api, connectSession = connectVolunteerSession }: AppProps) {
   async function leaveSession(): Promise<void> {
     if (!active) return
     manualDisconnect.current = true
-    await active.live.disconnect()
-    currentSession.current = null
-    setActive(null)
-    setFrozenReason(null)
-    setHasScreenMedia(false)
-    setHasCameraMedia(false)
-    setSafetyRisk(null)
+    let disconnectFailed = false
+    try {
+      await active.live.disconnect()
+    } catch {
+      disconnectFailed = true
+    } finally {
+      currentSession.current = null
+      setActive(null)
+      setFrozenReason(null)
+      setHasScreenMedia(false)
+      setHasCameraMedia(false)
+      setSafetyRisk(null)
+    }
+    if (disconnectFailed) {
+      setError('Assistance ended and your camera and microphone were stopped, but the connection did not close cleanly.')
+    }
   }
 
   function audit(message: VolunteerOutboundMessage): void {
@@ -216,39 +255,39 @@ function App({ api, connectSession = connectVolunteerSession }: AppProps) {
   return (
     <div className="app-shell">
       <header className="site-header">
-        <a className="brand" href="/" aria-label="SecondSight 首页">
+        <a className="brand" href="/" aria-label="SecondSight home">
           <span className="brand-mark" aria-hidden="true">S</span>
           <span>
             <strong>SecondSight</strong>
-            <small>第二双眼睛</small>
+            <small>A second pair of eyes</small>
           </span>
         </a>
         <div className="safety-promise">
           <span aria-hidden="true">✓</span>
-          你只能看和指，操作永远由长辈本人完成
+          You can only watch and guide. The elder stays in control.
         </div>
       </header>
 
       {!active ? (
         <main className="join-layout">
           <section className="join-copy">
-            <p className="eyebrow">只看 · 只听 · 只指引</p>
-            <h1>陪长辈把数字世界<br />走得更安心</h1>
+            <p className="eyebrow">WATCH · LISTEN · GUIDE</p>
+            <h1>Help older adults navigate<br />the digital world with confidence</h1>
             <p className="intro">
-              输入长辈屏幕上的房间码。你可以语音沟通、圈出位置和画箭头，
-              但无法点击、输入或控制对方设备。
+              Enter the room code shown on the elder&apos;s screen. You can talk, circle a location,
+              and draw arrows, but you cannot click, type, or control their device.
             </p>
             <ul className="trust-list">
-              <li><span aria-hidden="true">01</span> 画面中的敏感区域由长辈设备先行遮蔽</li>
-              <li><span aria-hidden="true">02</span> AI 安全助手持续守护会话</li>
-              <li><span aria-hidden="true">03</span> 关键指引和告警留有审计记录</li>
+              <li><span aria-hidden="true">01</span> Sensitive areas are masked on the elder&apos;s device</li>
+              <li><span aria-hidden="true">02</span> AI safety monitoring stays active throughout the session</li>
+              <li><span aria-hidden="true">03</span> Important guidance and alerts are recorded for review</li>
             </ul>
           </section>
 
           <section className="join-card" aria-labelledby="join-title">
-            <p className="card-step">志愿者入口</p>
-            <h2 id="join-title">加入协助房间</h2>
-            <p className="card-description">保持此页面打开，即可第一时间收到长辈的在线求助。</p>
+            <p className="card-step">VOLUNTEER ACCESS</p>
+            <h2 id="join-title">Remote Assistance</h2>
+            <p className="card-description">Keep this page open to receive live help requests as soon as they arrive.</p>
             <div className={`receiver-status receiver-status--${receiverStatus}`} role="status">
               <i aria-hidden="true" />
               <span>
@@ -260,32 +299,32 @@ function App({ api, connectSession = connectVolunteerSession }: AppProps) {
             {broadcasts.length > 0 && (
               <section className="broadcast-list" aria-labelledby="broadcast-title">
                 <div className="broadcast-list__heading">
-                  <h3 id="broadcast-title">收到新的求助</h3>
-                  <span>{broadcasts.length} 条</span>
+                  <h3 id="broadcast-title">New Help Requests</h3>
+                  <span>{broadcasts.length} {broadcasts.length === 1 ? 'request' : 'requests'}</span>
                 </div>
                 {broadcasts.map((broadcast) => (
                   <article className="broadcast-card" key={broadcast.sessionId}>
                     <div>
-                      <strong>{broadcast.elderLabel}正在等待帮助</strong>
+                      <strong>{displayElderLabel(broadcast.elderLabel)} is waiting for help</strong>
                       <time dateTime={broadcast.requestedAt}>
                         {formatBroadcastTime(broadcast.requestedAt)}
                       </time>
                     </div>
                     <button
                       type="button"
-                      disabled={claimingSessionId !== null}
+                      disabled={joining || claimingSessionId !== null}
                       onClick={() => void claimBroadcast(broadcast)}
                     >
-                      {claimingSessionId === broadcast.sessionId ? '正在响应…' : '响应求助'}
+                      {claimingSessionId === broadcast.sessionId ? 'Responding…' : 'Respond'}
                     </button>
                   </article>
                 ))}
               </section>
             )}
 
-            <div className="join-divider"><span>或使用分享码</span></div>
+            <div className="join-divider"><span>Or use a room code</span></div>
             <form onSubmit={handleJoin}>
-              <label htmlFor="room-code">6 位房间码</label>
+              <label htmlFor="room-code">6-digit room code</label>
               <input
                 id="room-code"
                 value={code}
@@ -295,20 +334,27 @@ function App({ api, connectSession = connectVolunteerSession }: AppProps) {
                 placeholder="000 000"
                 aria-describedby={error ? 'join-error' : undefined}
               />
-              <label htmlFor="volunteer-name">你的昵称</label>
+              <label htmlFor="volunteer-name">Your display name</label>
               <input
                 id="volunteer-name"
                 value={name}
                 onChange={(event) => setName(event.target.value.slice(0, 40))}
                 autoComplete="nickname"
-                placeholder="例如：小王"
+                placeholder="e.g. Alex"
               />
               {error && <p className="form-error" id="join-error" role="alert">{error}</p>}
-              <button className="primary-button" type="submit" disabled={joining}>
-                {joining ? '正在安全连接…' : '进入协助房间'}
+              <button
+                className="primary-button"
+                type="submit"
+                disabled={joining || claimingSessionId !== null}
+              >
+                {joining ? 'Connecting securely…' : 'Join Assistance Session'}
               </button>
             </form>
-            <p className="microphone-note">进入后浏览器会请求摄像头和麦克风权限，用于和长辈视频通话。</p>
+            <p className="media-permission-note">
+              Your browser asks for camera and microphone access only after you choose to join or respond.
+              Both are required for live assistance.
+            </p>
           </section>
         </main>
       ) : (
@@ -316,22 +362,36 @@ function App({ api, connectSession = connectVolunteerSession }: AppProps) {
           <section className="session-heading">
             <div>
               <p className="eyebrow">{active.contextLabel}</p>
-              <h1>正在协助</h1>
-              <p>志愿者：{active.volunteerName}</p>
+              <h1>Assistance in Progress</h1>
+              <p>Volunteer: {active.volunteerName}</p>
             </div>
             <div className="session-actions">
-              <span className="connection-pill"><i /> 已安全连接</span>
+              <span className="connection-pill"><i /> Securely connected</span>
               <a
                 className="alerts-link"
                 href={`/alerts.html?session_id=${encodeURIComponent(active.joined.sessionId)}`}
                 target="_blank"
                 rel="noreferrer"
               >
-                查看安全告警记录
+                View Safety Alerts
               </a>
               <button className="leave-button" type="button" onClick={() => void leaveSession()}>
-                结束本次协助
+                End Assistance
               </button>
+            </div>
+          </section>
+
+          <section className="volunteer-camera-card" aria-label="Volunteer camera status">
+            <video
+              ref={localCameraRef}
+              aria-label="Your camera preview"
+              autoPlay
+              playsInline
+              muted
+            />
+            <div>
+              <strong><i aria-hidden="true" /> Camera is on</strong>
+              <small>It turns off automatically when assistance ends</small>
             </div>
           </section>
 
@@ -339,13 +399,13 @@ function App({ api, connectSession = connectVolunteerSession }: AppProps) {
             <section className={`safety-risk-card ${safetyRisk.level}`} role="alert">
               <div className="safety-risk-icon" aria-hidden="true">!</div>
               <div>
-                <p className="eyebrow">实时安全提醒</p>
-                <h2>长辈端检测到危险话术</h2>
+                <p className="eyebrow">LIVE SAFETY ALERT</p>
+                <h2>Potentially dangerous language detected</h2>
                 <p className="risk-transcript">“{safetyRisk.transcript}”</p>
-                {safetyRisk.transcript_truncated && <p>字幕过长，风险卡只显示前 1,000 个字符。</p>}
-                <p>请立即停止询问验证码、密码、付款信息或远程控制权限。</p>
+                {safetyRisk.transcript_truncated && <p>The transcript was shortened to the first 1,000 characters.</p>}
+                <p>Stop asking for verification codes, passwords, payment details, or remote-control access immediately.</p>
               </div>
-              <button type="button" onClick={() => setSafetyRisk(null)}>我知道了</button>
+              <button type="button" onClick={() => setSafetyRisk(null)}>Dismiss</button>
             </section>
           )}
 
@@ -356,50 +416,55 @@ function App({ api, connectSession = connectVolunteerSession }: AppProps) {
               disabled={frozenReason !== null}
               send={(message) => active.live.send(message)}
               log={audit}
-              onSendError={() => setError('标注发送失败，请检查连接')}
+              onSendError={() => setError('Could not send the annotation. Check your connection.')}
             />
             <aside className="camera-panel" aria-labelledby="elder-camera-title">
               <div className="camera-heading">
                 <div>
-                  <p className="camera-kicker">面对面沟通</p>
-                  <h2 id="elder-camera-title">长辈本人</h2>
+                  <p className="camera-kicker">FACE-TO-FACE VIDEO</p>
+                  <h2 id="elder-camera-title">Elder Camera</h2>
                 </div>
                 <span className={`camera-status ${hasCameraMedia ? 'connected' : ''}`}>
-                  {hasCameraMedia ? '画面已连接' : '等待画面'}
+                  {hasCameraMedia ? 'Video connected' : 'Waiting for video'}
                 </span>
               </div>
               <div className="camera-stage">
-                <video ref={cameraRef} autoPlay playsInline aria-label="长辈摄像头画面" />
+                <video ref={cameraRef} autoPlay playsInline aria-label="Elder camera video" />
                 {!hasCameraMedia && (
                   <div className="camera-waiting" aria-live="polite">
                     <span aria-hidden="true">◎</span>
-                    <strong>等待长辈开启摄像头…</strong>
-                    <small>摄像头就绪后会自动出现</small>
+                    <strong>Waiting for the elder to turn on their camera…</strong>
+                    <small>The video will appear automatically when it is ready</small>
                   </div>
                 )}
               </div>
               <p className="camera-note">
-                摄像头与脱敏电脑画面分开显示，标注只会落在电脑画面上。
+                Camera video is shown separately from the masked computer screen. Annotations only appear on the shared screen.
               </p>
             </aside>
           </div>
           <audio ref={audioRef} autoPlay />
           <div className="session-footer">
-            <p><strong>记住：</strong>只描述屏幕上看见的内容，不询问密码、验证码或付款信息。</p>
-            {auditFailed && <p className="audit-warning" role="status">审计记录暂时未送达，协助画面不受影响。</p>}
+            <p><strong>Remember:</strong> Describe only what you can see on the screen. Never ask for passwords, verification codes, or payment details.</p>
+            {auditFailed && <p className="audit-warning" role="status">The audit record could not be delivered. The assistance view is still active.</p>}
             {error && <p className="form-error" role="alert">{error}</p>}
           </div>
         </main>
       )}
 
       {frozenReason && (
-        <div className="freeze-overlay" role="alertdialog" aria-modal="true">
+        <div
+          className="freeze-overlay"
+          role="alert"
+          aria-labelledby="freeze-title"
+          aria-describedby="freeze-reason freeze-guidance"
+        >
           <div className="freeze-card">
             <span className="freeze-icon" aria-hidden="true">!</span>
-            <p className="eyebrow">安全保护已启动</p>
-            <h2>会话已被 AI 安全助手暂停</h2>
-            <p>{frozenReason}</p>
-            <small>请停止询问敏感信息。只有长辈端可以决定是否恢复会话。</small>
+            <p className="eyebrow">SAFETY PROTECTION IS ACTIVE</p>
+            <h2 id="freeze-title">The AI safety monitor paused this session</h2>
+            <p id="freeze-reason">{frozenReason}</p>
+            <small id="freeze-guidance">Stop asking for sensitive information. Only the elder can decide whether to resume.</small>
           </div>
         </div>
       )}
@@ -409,22 +474,22 @@ function App({ api, connectSession = connectVolunteerSession }: AppProps) {
 
 function joinFailureMessage(cause: unknown): string {
   if (cause instanceof ApiError) {
-    if (cause.status === 404) return '没有找到这个房间，请和长辈核对房间码'
-    if (cause.status === 410) return '这次协助已经结束，请让长辈重新发起'
-    if (cause.status === 423) return '这次协助已被安全助手暂停，请等待长辈处理'
-    if (cause.status === 409) return '这次求助已经有志愿者接入'
-    if (cause.status === 401 || cause.status === 403) return '连接凭证无效，请联系现场负责人'
+    if (cause.status === 404) return 'Room not found. Check the room code with the elder.'
+    if (cause.status === 410) return 'This assistance session has ended. Ask the elder to start a new one.'
+    if (cause.status === 423) return 'The safety monitor paused this session. Wait for the elder to continue.'
+    if (cause.status === 409) return 'Another volunteer already responded to this request.'
+    if (cause.status === 401 || cause.status === 403) return 'The connection credentials are invalid. Contact the session coordinator.'
     return cause.message
   }
   if (cause instanceof DOMException && cause.name === 'NotAllowedError') {
-    return '需要摄像头和麦克风权限才能通话，请允许后重试'
+    return 'Camera and microphone access are required to assist. Allow access, then try again.'
   }
-  return '暂时无法加入房间，请检查网络后重试'
+  return 'Unable to join the room. Check your connection, then try again.'
 }
 
 function claimFailureMessage(cause: unknown): string {
   if (cause instanceof ApiError && cause.status === 409) {
-    return '这条求助刚刚已被其他志愿者响应，请等待下一条广播'
+    return 'Another volunteer just responded to this request. Wait for the next request.'
   }
   return joinFailureMessage(cause)
 }
@@ -444,30 +509,37 @@ function resolveAssistantId(): string {
 
 function receiverStatusLabel(status: ReceiverStatus): string {
   switch (status) {
-    case 'connecting': return '正在连接广播服务'
-    case 'receiving': return '正在接收广播'
-    case 'reconnecting': return '广播连接正在恢复'
-    case 'unavailable': return '广播服务尚未配置'
+    case 'connecting': return 'Connecting to the request service'
+    case 'receiving': return 'Listening for help requests'
+    case 'reconnecting': return 'Reconnecting to the request service'
+    case 'unavailable': return 'Live requests are not configured'
   }
 }
 
 function receiverStatusDetail(status: ReceiverStatus): string {
   switch (status) {
-    case 'connecting': return '正在登记你的在线状态…'
-    case 'receiving': return '页面会自动显示新的长辈求助'
-    case 'reconnecting': return '不会重复认领，网络恢复后自动继续'
-    case 'unavailable': return '仍可使用下方 6 位分享码加入'
+    case 'connecting': return 'Registering your availability…'
+    case 'receiving': return 'New elder requests will appear automatically'
+    case 'reconnecting': return 'The page will resume automatically without duplicate claims'
+    case 'unavailable': return 'You can still join with the 6-digit room code below'
   }
 }
 
 function formatBroadcastTime(value: string): string {
   const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return '刚刚发出'
-  return `${new Intl.DateTimeFormat('zh-CN', {
+  if (Number.isNaN(date.getTime())) return 'Sent just now'
+  return `Sent at ${new Intl.DateTimeFormat('en-AU', {
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
-  }).format(date)} 发出`
+  }).format(date)}`
+}
+
+function displayElderLabel(value: string): string {
+  const label = value.trim()
+  const isKnownDefault = label.length === 2 &&
+    label.codePointAt(0) === 0x957f && label.codePointAt(1) === 0x8f88
+  return !label || isKnownDefault ? 'The elder' : label
 }
 
 export default App

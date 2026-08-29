@@ -2,7 +2,10 @@
 
 Desktop React/Vite client for volunteer voice guidance and visual annotations. It deliberately has
 no keyboard, mouse, or remote-control protocol. The LiveKit token permits the volunteer to publish
-only microphone and camera tracks, and still forbids screen sharing.
+only microphone and camera tracks, and still forbids screen sharing. The browser acquires both
+tracks only after the volunteer clicks to join or respond, before consuming that request on the
+backend. It reuses those tracks for LiveKit, shows a local camera preview, and stops them when the
+volunteer leaves or any later join step fails.
 
 ## Configure
 

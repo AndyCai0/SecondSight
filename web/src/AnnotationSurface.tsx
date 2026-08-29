@@ -224,12 +224,12 @@ export function AnnotationSurface({
   }
 
   return (
-    <section className="assist-surface" aria-label="远程协助画面">
+    <section className="assist-surface" aria-label="Remote assistance screen">
       <div className="video-stage" ref={containerRef}>
-        <video ref={videoRef} autoPlay playsInline aria-label="长辈共享的屏幕" />
+        <video ref={videoRef} autoPlay playsInline aria-label="Elder's shared screen" />
         <canvas
           ref={canvasRef}
-          aria-label="标注画布"
+          aria-label="Annotation canvas"
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
@@ -239,20 +239,20 @@ export function AnnotationSurface({
             setDragEnd(null)
           }}
         />
-        {!hasMedia && <div className="waiting-media">等待长辈分享电脑画面…</div>}
+        {!hasMedia && <div className="waiting-media">Waiting for the elder to share their screen…</div>}
       </div>
-      <div className="annotation-toolbar" role="toolbar" aria-label="标注工具">
+      <div className="annotation-toolbar" role="toolbar" aria-label="Annotation tools">
         <button className={tool === 'circle' ? 'selected' : ''} onClick={() => setTool('circle')} disabled={disabled}>
-          <span aria-hidden="true">◯</span> 圈出位置
+          <span aria-hidden="true">◯</span> Circle a location
         </button>
         <button className={tool === 'arrow' ? 'selected' : ''} onClick={() => setTool('arrow')} disabled={disabled}>
-          <span aria-hidden="true">↗</span> 画箭头
+          <span aria-hidden="true">↗</span> Draw an arrow
         </button>
         <button className={tool === 'pointer' ? 'selected' : ''} onClick={() => setTool('pointer')} disabled={disabled}>
-          <span aria-hidden="true">●</span> 激光笔
+          <span aria-hidden="true">●</span> Laser pointer
         </button>
         <button onClick={clearAnnotations} disabled={disabled}>
-          清除标注
+          Clear annotations
         </button>
       </div>
     </section>

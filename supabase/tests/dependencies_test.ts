@@ -109,6 +109,18 @@ Deno.test('production LiveKit token contains a microphone-only volunteer grant',
   assert.equal(payload.sub, 'volunteer:小王')
   assert.equal(payload.video.room, '482913')
   assert.deepEqual(payload.video.canPublishSources, ['microphone'])
+
+  const elderToken = await dependencies.tokens.sign({
+    identity: 'elder',
+    room: '482913',
+    canPublish: true,
+    canSubscribe: true,
+  })
+  assert.deepEqual(await dependencies.elderCredentials.verify(elderToken), {
+    identity: 'elder',
+    room: '482913',
+  })
+  await assert.rejects(() => dependencies.elderCredentials.verify('not-a-valid-jwt'))
 })
 
 Deno.test('alert history pagination returns every record without a silent cap', async () => {

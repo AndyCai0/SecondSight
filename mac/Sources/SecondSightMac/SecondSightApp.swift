@@ -129,13 +129,14 @@ private struct SafetyMonitoringCard: View {
     @ObservedObject var model: AppModel
 
     private var isRunningOrConnecting: Bool {
-        model.safetyState == .listening || model.safetyState == .connecting
+        model.safetyState == .listening || model.safetyState == .connecting ||
+            model.safetyState == .degraded
     }
 
     private var statusColor: Color {
         switch model.safetyState {
         case .listening: .green
-        case .connecting: .orange
+        case .connecting, .degraded: .orange
         case .disconnected: .red
         case .off: .secondary
         }

@@ -8,6 +8,7 @@ final class LiveKitTransport: NSObject, RoomDelegate, @unchecked Sendable {
     var onDataMessage: (@Sendable (DataMessage) -> Void)?
     var onRemoteAudioTrack: (@Sendable (RemoteAudioTrack) -> Void)?
     var onRemoteAudioTrackUnavailable: (@Sendable () -> Void)?
+    var onDisconnected: (@Sendable () -> Void)?
     var onError: (@Sendable (Error) -> Void)?
 
     private let lock = NSLock()
@@ -133,7 +134,9 @@ final class LiveKitTransport: NSObject, RoomDelegate, @unchecked Sendable {
         } catch DataMessageError.forbiddenVolunteerControl {
             return
         } catch {
-            onError?(error)
+            // Data-channel input is untrusted. A malformed or unknown message is not a
+            // transport disconnect and must not turn off otherwise healthy protection.
+            return
         }
     }
 
@@ -142,8 +145,18 @@ final class LiveKitTransport: NSObject, RoomDelegate, @unchecked Sendable {
     }
 
     func room(_ room: Room, didDisconnectWithError error: LiveKitError?) {
-        guard let error else { return }
-        onError?(error)
+        withState {
+            isConnected = false
+            mediaEnabled = false
+            videoPublication = nil
+            audioPublication = nil
+            publishing = false
+        }
+        if let error {
+            onError?(error)
+        } else {
+            onDisconnected?()
+        }
     }
 
     enum TransportError: LocalizedError {

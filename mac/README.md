@@ -51,7 +51,7 @@ cp Config.template.plist Config.plist
 - A3：`ScreenCaptureService` 用 ScreenCaptureKit 采主显示器 12fps，按 bundle id 排除本 App 窗口；`LiveKitTransport` 使用 `BufferCapturer` 发布自定义屏幕轨和麦克风轨。
 - A4：`AccessibilityScanner` 5Hz 扫描 secure text field/敏感标题；`FrameRedactor` 先复制帧，再按 Retina 比例覆盖黑块；Secure Event Input 无定位矩形时整屏替换为安全占位图。
 - A5：`OverlayWindowController` 是必要的薄 AppKit 窗口桥接，内容由 SwiftUI `OverlayView` 渲染圆圈、箭头、pointer、TTL 和 clear。`DataMessageCodec` 在解析边界拒绝 `volunteer:*` 的全部 `control.*`。
-- A6：用户主动点 `Start Safety Listening` 后，`RemoteAudioTrack.add(audioRenderer:)` 才把志愿者 PCM 帧转换为 16 kHz mono PCM16 并送入 AssemblyAI Streaming v3。partial/final 字幕先经过本机 `FastRiskDetector`；相同 fingerprint 8 秒去重，最近上下文只保留 25 秒。warning/danger 立即显示大字安全层、写入 `risk-event` 并通过 LiveKit `safety.risk` 通知志愿者。Stop 会移除 renderer、发送 `Terminate` 并关闭 websocket；不会保存原始音频，也不会逐句调用 LLM。
+- A6：用户主动点 `Start Safety Listening` 后，`RemoteAudioTrack.add(audioRenderer:)` 才把志愿者 PCM 帧转换为 16 kHz mono PCM16 并送入 AssemblyAI Streaming v3。partial/final 字幕先经过本机 `FastRiskDetector`；同一 `turn_order` 事件 8 秒去重，最近上下文只保留 25 秒。warning/danger 立即显示大字安全层、写入 `risk-event` 并通过 LiveKit `safety.risk` 通知志愿者。Stop 会移除 renderer、发送 `Terminate` 并关闭 websocket；不会保存原始音频，也不会逐句调用 LLM。
 - A7：SwiftUI “按住说话”转写任务；只取 `LatestFrameStore` 中已经打码的帧，JPEG 长边不超过 1568px；AX 摘要深度不超过 4 且不超过 8KB；响应圈选并 TTS。
 
 ## 首次运行与人工验收

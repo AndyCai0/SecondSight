@@ -7,6 +7,7 @@ enum SafetyMonitoringState: Equatable {
     case off
     case connecting
     case listening
+    case degraded
     case disconnected
 
     var headline: String {
@@ -14,6 +15,7 @@ enum SafetyMonitoringState: Equatable {
         case .off: "Safety Monitoring: OFF"
         case .connecting: "Safety Monitoring: CONNECTING"
         case .listening: "Safety Monitoring: ON"
+        case .degraded: "Safety Monitoring: DEGRADED"
         case .disconnected: "Safety Monitoring: DISCONNECTED"
         }
     }
@@ -37,6 +39,7 @@ final class AppModel: ObservableObject {
     private var machine = SessionStateMachine()
     private var api: EdgeAPIClient?
     private var sessionID: UUID?
+    private var elderLiveKitCredential: String?
     private let scanner = AccessibilityScanner()
     private lazy var capture = ScreenCaptureService(scanner: scanner)
     private let transport = LiveKitTransport()
@@ -84,6 +87,7 @@ final class AppModel: ObservableObject {
                 errorMessage = nil
                 let response = try await api.createSession()
                 sessionID = response.sessionID
+                elderLiveKitCredential = response.liveKitToken
                 roomCode = response.code
                 _ = try machine.apply(.sessionCreated)
                 phase = machine.phase
@@ -129,7 +133,7 @@ final class AppModel: ObservableObject {
 
     func toggleSafetyListening() {
         switch safetyState {
-        case .connecting, .listening:
+        case .connecting, .listening, .degraded:
             stopSafetyListening()
         case .off, .disconnected:
             startSafetyListening()
@@ -155,13 +159,18 @@ final class AppModel: ObservableObject {
         guard let risk = currentSafetyRisk else { return }
         let transcript = currentRiskTranscript
         Task {
-            try? await transport.publish(.safetyRisk(
-                level: risk.level,
-                transcript: transcript,
-                matchedRules: risk.matchedRules
-            ))
+            do {
+                try await transport.publish(.safetyRisk(
+                    level: risk.level,
+                    transcript: transcript,
+                    matchedRules: risk.matchedRules
+                ))
+                statusMessage = "安全提醒已经发送给志愿者"
+            } catch {
+                markSafetyMonitoringDegraded(reason: "Volunteer notification is unavailable.")
+                errorMessage = "志愿者通知暂时未送达，请直接停止通话或联系信任的人。"
+            }
         }
-        statusMessage = "安全提醒已经发送给志愿者"
         dismissSafetyWarning()
     }
 
@@ -175,7 +184,7 @@ final class AppModel: ObservableObject {
             errorMessage = "请先允许麦克风权限，再开始安全监听。"
             return
         }
-        guard sessionID != nil, api != nil else {
+        guard sessionID != nil, api != nil, elderLiveKitCredential != nil else {
             errorMessage = "安全监听服务尚未配置。"
             return
         }
@@ -226,14 +235,18 @@ final class AppModel: ObservableObject {
     private func beginSafetyStreaming(track: RemoteAudioTrack) {
         guard safetyStartRequested, safetyState == .connecting,
               !safetyCredentialRequestInFlight,
-              let sessionID, let api, let requestID = safetyRequestID
+              let sessionID, let api, let elderLiveKitCredential,
+              let requestID = safetyRequestID
         else { return }
         safetyCredentialRequestInFlight = true
         safetyStatusMessage = "Connecting to live transcription…"
 
         Task {
             do {
-                let credential = try await api.createAssemblyAIStreamingCredential(sessionID: sessionID)
+                let credential = try await api.createAssemblyAIStreamingCredential(
+                    sessionID: sessionID,
+                    elderCredential: elderLiveKitCredential
+                )
                 guard safetyStartRequested, safetyState == .connecting,
                       safetyRequestID == requestID
                 else { return }
@@ -248,7 +261,7 @@ final class AppModel: ObservableObject {
     }
 
     private func safetyMonitoringDisconnected(reason: String) {
-        guard safetyState == .connecting || safetyState == .listening else { return }
+        guard safetyState == .connecting || safetyState == .listening || safetyState == .degraded else { return }
         safetyStartRequested = false
         safetyRequestID = nil
         safetyCredentialRequestInFlight = false
@@ -258,8 +271,14 @@ final class AppModel: ObservableObject {
         livePartialTranscript = ""
     }
 
+    private func markSafetyMonitoringDegraded(reason: String) {
+        guard safetyState == .listening || safetyState == .degraded else { return }
+        safetyState = .degraded
+        safetyStatusMessage = "Local warning active — \(reason)"
+    }
+
     private func handleSafetyTranscript(_ update: StreamingTranscript) async {
-        guard safetyState == .listening else { return }
+        guard safetyState == .listening || safetyState == .degraded else { return }
         let now = Date()
         let context = recentTranscript.transcripts(at: now)
 
@@ -280,8 +299,13 @@ final class AppModel: ObservableObject {
             currentContext: ["source": "volunteer_live_audio"]
         )
         guard decision.level != .safe,
-              riskDeduplicator.shouldEmit(decision, transcript: update.text, at: now),
-              let sessionID, let api
+              riskDeduplicator.shouldEmit(
+                  decision,
+                  transcript: update.text,
+                  eventID: "turn-\(update.turnOrder)",
+                  at: now
+              ),
+              let sessionID, let api, let elderLiveKitCredential
         else { return }
 
         currentSafetyRisk = decision
@@ -306,11 +330,16 @@ final class AppModel: ObservableObject {
             do {
                 try await transport.publish(message)
             } catch {
+                markSafetyMonitoringDegraded(reason: "Volunteer notification is unavailable.")
                 errorMessage = "本机安全提醒仍在工作，但志愿者通知暂时未送达。"
             }
             do {
-                _ = try await api.recordRiskEvent(request)
+                _ = try await api.recordRiskEvent(
+                    request,
+                    elderCredential: elderLiveKitCredential
+                )
             } catch {
+                markSafetyMonitoringDegraded(reason: "Backend risk-event delivery is unavailable.")
                 errorMessage = "安全提醒仍在本机工作，但告警记录暂时未送达。"
             }
         }
@@ -355,6 +384,11 @@ final class AppModel: ObservableObject {
             Task { @MainActor in
                 self?.errorMessage = "通话连接有问题：\(error.localizedDescription)"
                 self?.safetyMonitoringDisconnected(reason: "The call connection was lost.")
+            }
+        }
+        transport.onDisconnected = { [weak self] in
+            Task { @MainActor in
+                self?.safetyMonitoringDisconnected(reason: "The call connection was closed.")
             }
         }
         safetyStreaming.onConnected = { [weak self] in
@@ -475,6 +509,7 @@ final class AppModel: ObservableObject {
         }
         roomCode = nil
         sessionID = nil
+        elderLiveKitCredential = nil
         statusMessage = "本次求助已经结束"
     }
 }

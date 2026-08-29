@@ -90,6 +90,8 @@ verdict ∈ `ok | warn | freeze`。目标延迟 < 2s（用 haiku）。
 
 ### 4.6 `POST assemblyai-token` — 临时实时转录凭证（老人端调用）
 
+请求头：`X-SecondSight-Elder-Token: <create-session 返回的老人 LiveKit JWT>`
+
 请求:`{"session_id":"uuid"}`
 
 响应:
@@ -98,8 +100,12 @@ verdict ∈ `ok | warn | freeze`。目标延迟 < 2s（用 haiku）。
 ```
 
 只有 Edge Function 持有 `ASSEMBLYAI_API_KEY`。老人端不得收到、记录或打包永久 API Key。
+Edge Function 会校验 LiveKit JWT 的签名、有效期、`identity=elder` 和 room；志愿者 token
+不能申请临时转录凭证。
 
 ### 4.7 `POST risk-event` — 实时规则引擎风险事件（老人端调用）
+
+请求头：`X-SecondSight-Elder-Token: <create-session 返回的老人 LiveKit JWT>`
 
 请求:
 ```json
@@ -111,6 +117,7 @@ verdict ∈ `ok | warn | freeze`。目标延迟 < 2s（用 haiku）。
 `level` 仅允许 `warning | danger`；响应：
 `{"ok":true,"fingerprint":"danger:request_sensitive_information:verification_code"}`。
 第一版写入既有 `session_events`，不保存原始音频。
+该端点使用同一老人端 room 凭证，拒绝志愿者伪造 `safety_monitor` 事件。
 
 ## 5. 联调里程碑（按此对表，不见不散）
 

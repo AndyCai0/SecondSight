@@ -22,6 +22,11 @@ export interface TokenGrant {
   canPublishSources?: readonly string[]
 }
 
+export interface ElderCredentialGrant {
+  identity: string
+  room: string
+}
+
 export interface EdgeDependencies {
   sessions: {
     create(code: string): Promise<SessionRecord>
@@ -49,6 +54,9 @@ export interface EdgeDependencies {
   }
   tokens: {
     sign(grant: TokenGrant): Promise<string>
+  }
+  elderCredentials: {
+    verify(token: string): Promise<ElderCredentialGrant>
   }
   assemblyAI: {
     createStreamingToken(input: {
@@ -114,8 +122,14 @@ export async function handleEdgeRequest(
       return jsonResponse({ error: 'Invalid session' }, 400)
     }
 
+    const elderGrant = await readElderCredential(request, dependencies)
+    if (elderGrant instanceof Response) return elderGrant
+
     const session = await dependencies.sessions.findById(sessionId)
     if (!session) return jsonResponse({ error: 'Session not found' }, 404)
+    if (elderGrant.identity !== 'elder' || elderGrant.room !== session.code) {
+      return jsonResponse({ error: 'Elder credential is not valid for this session' }, 403)
+    }
     if (session.status === 'ended') return jsonResponse({ error: 'Session has ended' }, 410)
     if (session.status === 'frozen') return jsonResponse({ error: 'Session is frozen' }, 423)
 
@@ -153,8 +167,14 @@ export async function handleEdgeRequest(
       return jsonResponse({ error: 'Invalid risk event' }, 400)
     }
 
+    const elderGrant = await readElderCredential(request, dependencies)
+    if (elderGrant instanceof Response) return elderGrant
+
     const session = await dependencies.sessions.findById(sessionId)
     if (!session) return jsonResponse({ error: 'Session not found' }, 404)
+    if (elderGrant.identity !== 'elder' || elderGrant.room !== session.code) {
+      return jsonResponse({ error: 'Elder credential is not valid for this session' }, 403)
+    }
     if (session.status === 'ended') return jsonResponse({ error: 'Session has ended' }, 410)
 
     const normalizedTimestamp = new Date(timestampMilliseconds).toISOString()
@@ -345,7 +365,22 @@ export function preflightResponse(): Response {
 export const corsHeaders = {
   'access-control-allow-origin': '*',
   'access-control-allow-methods': 'POST, OPTIONS',
-  'access-control-allow-headers': 'authorization, apikey, content-type',
+  'access-control-allow-headers': 'authorization, apikey, content-type, x-secondsight-elder-token',
+}
+
+async function readElderCredential(
+  request: Request,
+  dependencies: EdgeDependencies,
+): Promise<ElderCredentialGrant | Response> {
+  const token = request.headers.get('x-secondsight-elder-token')?.trim() ?? ''
+  if (token.length === 0) {
+    return jsonResponse({ error: 'Missing elder credential' }, 401)
+  }
+  try {
+    return await dependencies.elderCredentials.verify(token)
+  } catch {
+    return jsonResponse({ error: 'Invalid elder credential' }, 401)
+  }
 }
 
 async function readObject(request: Request): Promise<Record<string, unknown>> {

@@ -197,12 +197,16 @@ public struct RiskEventDeduplicator: Sendable {
     public mutating func shouldEmit(
         _ result: RiskDetectionResult,
         transcript _: String,
+        eventID: String? = nil,
         at date: Date = Date()
     ) -> Bool {
         guard result.level != .safe else { return false }
 
         lastEmittedAt = lastEmittedAt.filter { date.timeIntervalSince($0.value) <= cooldown }
-        let fingerprint = Self.fingerprint(for: result)
+        let riskFingerprint = Self.fingerprint(for: result)
+        // AssemblyAI keeps one turn_order while an interim transcript grows. Use that stable
+        // event identity when available so newly matched words cannot bypass the cooldown.
+        let fingerprint = eventID.map { "streaming-event:\($0)" } ?? riskFingerprint
         if let previous = lastEmittedAt[fingerprint], date.timeIntervalSince(previous) < cooldown {
             return false
         }

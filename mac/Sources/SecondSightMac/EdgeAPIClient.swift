@@ -36,23 +36,40 @@ final class EdgeAPIClient: @unchecked Sendable {
         try await post(path: "ai-referee", body: request, response: AIRefereeResponse.self)
     }
 
-    func createAssemblyAIStreamingCredential(sessionID: UUID) async throws -> AssemblyAIStreamingCredential {
+    func createAssemblyAIStreamingCredential(
+        sessionID: UUID,
+        elderCredential: String
+    ) async throws -> AssemblyAIStreamingCredential {
         try await post(
             path: "assemblyai-token",
             body: AssemblyAITokenRequest(sessionID: sessionID),
-            response: AssemblyAIStreamingCredential.self
+            response: AssemblyAIStreamingCredential.self,
+            additionalHeaders: ["x-secondsight-elder-token": elderCredential]
         )
     }
 
-    func recordRiskEvent(_ request: RiskEventRequest) async throws -> RiskEventResponse {
-        try await post(path: "risk-event", body: request, response: RiskEventResponse.self)
+    func recordRiskEvent(
+        _ request: RiskEventRequest,
+        elderCredential: String
+    ) async throws -> RiskEventResponse {
+        try await post(
+            path: "risk-event",
+            body: request,
+            response: RiskEventResponse.self,
+            additionalHeaders: ["x-secondsight-elder-token": elderCredential]
+        )
     }
 
     func logEvent(_ request: LogEventRequest) async {
         _ = try? await post(path: "log-event", body: request, response: LogEventResponse.self)
     }
 
-    private func post<Body: Encodable, Response: Decodable>(path: String, body: Body, response: Response.Type) async throws -> Response {
+    private func post<Body: Encodable, Response: Decodable>(
+        path: String,
+        body: Body,
+        response: Response.Type,
+        additionalHeaders: [String: String] = [:]
+    ) async throws -> Response {
         var url = configuration.supabaseURL
         url.append(path: "functions")
         url.append(path: "v1")
@@ -61,6 +78,9 @@ final class EdgeAPIClient: @unchecked Sendable {
         request.httpMethod = "POST"
         request.setValue("Bearer \(configuration.supabaseAnonKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        for (name, value) in additionalHeaders {
+            request.setValue(value, forHTTPHeaderField: name)
+        }
         request.httpBody = try encoder.encode(body)
         request.timeoutInterval = 15
 

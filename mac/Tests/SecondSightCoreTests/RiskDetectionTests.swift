@@ -85,6 +85,45 @@ final class RiskEventDeduplicatorTests: XCTestCase {
         XCTAssertTrue(deduplicator.shouldEmit(codeRisk, transcript: "tell me the verification code", at: start))
         XCTAssertTrue(deduplicator.shouldEmit(transferRisk, transcript: "transfer money to this bank account", at: start.addingTimeInterval(2)))
     }
+
+    func testANewStreamingTurnCanEmitTheSameDangerDuringCooldown() {
+        var deduplicator = RiskEventDeduplicator(cooldown: 8)
+        let start = Date(timeIntervalSince1970: 1_000)
+        let risk = FastRiskDetector.detect(transcript: "tell me the verification code")
+
+        XCTAssertTrue(deduplicator.shouldEmit(
+            risk,
+            transcript: "tell me the verification code",
+            eventID: "turn-1",
+            at: start
+        ))
+        XCTAssertTrue(deduplicator.shouldEmit(
+            risk,
+            transcript: "tell me the verification code again",
+            eventID: "turn-2",
+            at: start.addingTimeInterval(2)
+        ))
+    }
+
+    func testGrowingPartialCannotBypassCooldownWhenItsRuleSetBecomesMoreSevere() {
+        var deduplicator = RiskEventDeduplicator(cooldown: 8)
+        let start = Date(timeIntervalSince1970: 1_000)
+        let early = FastRiskDetector.detect(transcript: "verification code")
+        let grown = FastRiskDetector.detect(transcript: "tell me the verification code or password")
+
+        XCTAssertTrue(deduplicator.shouldEmit(
+            early,
+            transcript: "verification code",
+            eventID: "turn-7",
+            at: start
+        ))
+        XCTAssertFalse(deduplicator.shouldEmit(
+            grown,
+            transcript: "tell me the verification code or password",
+            eventID: "turn-7",
+            at: start.addingTimeInterval(2)
+        ))
+    }
 }
 
 final class RecentTranscriptBufferTests: XCTestCase {

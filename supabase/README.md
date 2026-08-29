@@ -92,10 +92,14 @@ curl --fail-with-body "$SECOND_SIGHT_FUNCTIONS_URL/ai-referee" \
 
 Request a temporary AssemblyAI streaming credential:
 
+`SECOND_SIGHT_ELDER_TOKEN` is the `lk_token` returned by `create-session` for that elder
+session. It is a short-lived capability, not a server secret; do not reuse a volunteer token.
+
 ```bash
 curl --fail-with-body "$SECOND_SIGHT_FUNCTIONS_URL/assemblyai-token" \
   -H "Authorization: Bearer $SECOND_SIGHT_ANON_KEY" \
   -H "apikey: $SECOND_SIGHT_ANON_KEY" \
+  -H "X-SecondSight-Elder-Token: $SECOND_SIGHT_ELDER_TOKEN" \
   -H 'Content-Type: application/json' \
   -d "{\"session_id\":\"$SECOND_SIGHT_SESSION_ID\"}"
 ```
@@ -106,6 +110,7 @@ Record a deduplicated local-rule risk event:
 curl --fail-with-body "$SECOND_SIGHT_FUNCTIONS_URL/risk-event" \
   -H "Authorization: Bearer $SECOND_SIGHT_ANON_KEY" \
   -H "apikey: $SECOND_SIGHT_ANON_KEY" \
+  -H "X-SecondSight-Elder-Token: $SECOND_SIGHT_ELDER_TOKEN" \
   -H 'Content-Type: application/json' \
   -d "{\"session_id\":\"$SECOND_SIGHT_SESSION_ID\",\"timestamp\":\"2026-08-29T07:30:00.000Z\",\"level\":\"danger\",\"transcript\":\"Please tell me the verification code.\",\"matched_rules\":[\"verification_code\",\"request_sensitive_information\"]}"
 ```

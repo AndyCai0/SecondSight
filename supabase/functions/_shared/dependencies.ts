@@ -1,5 +1,5 @@
 import { createClient } from 'npm:@supabase/supabase-js@2.112.4'
-import { AccessToken, TrackSource } from 'npm:livekit-server-sdk@2.18.0'
+import { AccessToken, TokenVerifier, TrackSource } from 'npm:livekit-server-sdk@2.18.0'
 import {
   type AlertRecord,
   type EdgeDependencies,
@@ -53,6 +53,10 @@ export function createProductionDependencies(
   })
   const ai = createAnthropicClient(config.anthropicApiKey, fetcher)
   const assemblyAI = createAssemblyAIClient(config.assemblyAIApiKey, fetcher)
+  const elderCredentials = createLiveKitElderCredentialVerifier(
+    config.liveKitApiKey,
+    config.liveKitApiSecret,
+  )
 
   return {
     sessions: {
@@ -163,10 +167,29 @@ export function createProductionDependencies(
         return await token.toJwt()
       },
     },
+    elderCredentials,
     assemblyAI,
     ai,
     publicLiveKitUrl: config.liveKitUrl,
     makeCode: randomSixDigitCode,
+  }
+}
+
+export function createLiveKitElderCredentialVerifier(apiKey: string, apiSecret: string) {
+  const verifier = new TokenVerifier(apiKey, apiSecret)
+  return {
+    async verify(token: string) {
+      const claims = await verifier.verify(token)
+      const identity = claims.sub
+      const room = claims.video?.room
+      if (
+        typeof identity !== 'string' || identity.length === 0 ||
+        claims.video?.roomJoin !== true || typeof room !== 'string' || room.length === 0
+      ) {
+        throw new Error('LiveKit credential is missing a room-join grant')
+      }
+      return { identity, room }
+    },
   }
 }
 

@@ -41,6 +41,11 @@ final class AssemblyAIStreamingService: NSObject, AudioRenderer, @unchecked Send
         }
     }
 
+    private struct DeliveredTurn: Equatable {
+        let transcript: String
+        let isFinal: Bool
+    }
+
     private let queue = DispatchQueue(label: "study.secondsight.assemblyai-streaming")
     private let urlSession: URLSession
     private let outputFormat = AVAudioFormat(
@@ -51,14 +56,18 @@ final class AssemblyAIStreamingService: NSObject, AudioRenderer, @unchecked Send
     )!
     private weak var track: RemoteAudioTrack?
     private var socket: URLSessionWebSocketTask?
-    private var sendTask: Task<Void, Never>?
+    private var audioSendTask: Task<Void, Never>?
+    private var terminationSendTask: Task<Void, Never>?
+    private var terminationTimeoutTask: Task<Void, Never>?
     private var converter: AVAudioConverter?
     private var inputSignature: AudioFormatSignature?
     private var pendingPCM = Data()
-    private var lastTranscriptByTurn: [Int: String] = [:]
+    private var queuedAudioChunks: [Data] = []
+    private var lastTranscriptByTurn: [Int: DeliveredTurn] = [:]
     private var running = false
     private var ready = false
     private var stopRequested = false
+    private let maximumQueuedAudioChunks = 40
 
     init(urlSession: URLSession = .shared) {
         self.urlSession = urlSession
@@ -79,6 +88,7 @@ final class AssemblyAIStreamingService: NSObject, AudioRenderer, @unchecked Send
             converter = nil
             inputSignature = nil
             pendingPCM.removeAll(keepingCapacity: true)
+            queuedAudioChunks.removeAll(keepingCapacity: true)
             lastTranscriptByTurn.removeAll()
             track.add(audioRenderer: self)
             socket.resume()
@@ -159,8 +169,9 @@ final class AssemblyAIStreamingService: NSObject, AudioRenderer, @unchecked Send
             let isFinal = response.endOfTurn == true
             guard isFinal || Self.isStablePartial(transcript) else { return }
             let turnOrder = response.turnOrder ?? 0
-            guard lastTranscriptByTurn[turnOrder] != transcript else { return }
-            lastTranscriptByTurn[turnOrder] = transcript
+            let deliveredTurn = DeliveredTurn(transcript: transcript, isFinal: isFinal)
+            guard lastTranscriptByTurn[turnOrder] != deliveredTurn else { return }
+            lastTranscriptByTurn[turnOrder] = deliveredTurn
             if lastTranscriptByTurn.count > 12 {
                 let oldest = lastTranscriptByTurn.keys.sorted().prefix(lastTranscriptByTurn.count - 12)
                 oldest.forEach { lastTranscriptByTurn.removeValue(forKey: $0) }
@@ -202,14 +213,34 @@ final class AssemblyAIStreamingService: NSObject, AudioRenderer, @unchecked Send
     }
 
     private func enqueueAudio(_ data: Data, socket: URLSessionWebSocketTask) {
-        let previous = sendTask
-        sendTask = Task { [weak self, weak socket] in
-            _ = await previous?.result
+        guard running, ready, self.socket === socket else { return }
+        if queuedAudioChunks.count >= maximumQueuedAudioChunks {
+            queuedAudioChunks.removeFirst(queuedAudioChunks.count - maximumQueuedAudioChunks + 1)
+        }
+        queuedAudioChunks.append(data)
+        sendNextAudioChunk(socket: socket)
+    }
+
+    private func sendNextAudioChunk(socket: URLSessionWebSocketTask) {
+        guard running, ready, self.socket === socket,
+              audioSendTask == nil, !queuedAudioChunks.isEmpty
+        else { return }
+        let data = queuedAudioChunks.removeFirst()
+        audioSendTask = Task { [weak self, weak socket] in
             guard !Task.isCancelled, let self, let socket else { return }
             do {
                 try await socket.send(.data(data))
+                self.queue.async { [weak self, weak socket] in
+                    guard let self, let socket, self.socket === socket else { return }
+                    self.audioSendTask = nil
+                    self.sendNextAudioChunk(socket: socket)
+                }
             } catch {
-                self.queue.async { [weak self] in self?.handleSocketFailure(error, socket: socket) }
+                self.queue.async { [weak self, weak socket] in
+                    guard let self, let socket, self.socket === socket else { return }
+                    self.audioSendTask = nil
+                    self.handleSocketFailure(error, socket: socket)
+                }
             }
         }
     }
@@ -259,25 +290,34 @@ final class AssemblyAIStreamingService: NSObject, AudioRenderer, @unchecked Send
         running = false
         ready = false
         detachTrack()
-        let pendingSend = sendTask
-        pendingSend?.cancel()
-        sendTask = nil
+        queuedAudioChunks.removeAll(keepingCapacity: true)
+        audioSendTask?.cancel()
+        audioSendTask = nil
 
-        Task { [weak self, weak socket] in
+        terminationSendTask?.cancel()
+        terminationSendTask = Task { [weak socket] in
             guard let socket else { return }
-            _ = await pendingSend?.result
             try? await socket.send(.string(#"{"type":"Terminate"}"#))
+        }
+        terminationTimeoutTask?.cancel()
+        terminationTimeoutTask = Task { [weak self, weak socket] in
             try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard !Task.isCancelled else { return }
             self?.queue.async { [weak self] in
-                guard let self, self.socket === socket else { return }
+                guard let self, let socket, self.socket === socket else { return }
                 self.finish(socket: socket)
             }
         }
     }
 
     private func stopImmediately() {
-        sendTask?.cancel()
-        sendTask = nil
+        audioSendTask?.cancel()
+        audioSendTask = nil
+        terminationSendTask?.cancel()
+        terminationSendTask = nil
+        terminationTimeoutTask?.cancel()
+        terminationTimeoutTask = nil
+        queuedAudioChunks.removeAll(keepingCapacity: true)
         if let socket {
             socket.cancel(with: .goingAway, reason: nil)
         }
@@ -294,8 +334,13 @@ final class AssemblyAIStreamingService: NSObject, AudioRenderer, @unchecked Send
         self.socket = nil
         running = false
         ready = false
-        sendTask?.cancel()
-        sendTask = nil
+        audioSendTask?.cancel()
+        audioSendTask = nil
+        terminationSendTask?.cancel()
+        terminationSendTask = nil
+        terminationTimeoutTask?.cancel()
+        terminationTimeoutTask = nil
+        queuedAudioChunks.removeAll(keepingCapacity: true)
         detachTrack()
     }
 

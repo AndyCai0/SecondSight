@@ -18,6 +18,12 @@ export interface ProductionConfig {
 
 type EnvironmentReader = (name: string) => string | undefined
 type Fetcher = typeof fetch
+type AlertPageLoader = (
+  from: number,
+  to: number,
+) => PromiseLike<{ data: AlertRecord[] | null; error: unknown }>
+
+const ALERT_PAGE_SIZE = 1_000
 
 export function readProductionConfig(
   readEnvironment: EnvironmentReader = Deno.env.get,
@@ -107,14 +113,16 @@ export function createProductionDependencies(
         if (error) throw new Error('Unable to record alert')
       },
       async list(sessionId) {
-        const { data, error } = await database
-          .from('alerts')
-          .select('id, ts, severity, transcript, reason')
-          .eq('session_id', sessionId)
-          .order('ts', { ascending: false })
-          .limit(200)
-        if (error) throw new Error('Unable to list alerts')
-        return (data ?? []) as AlertRecord[]
+        return await collectAllAlerts(async (from, to) => {
+          const { data, error } = await database
+            .from('alerts')
+            .select('id, ts, severity, transcript, reason')
+            .eq('session_id', sessionId)
+            .order('ts', { ascending: false })
+            .order('id', { ascending: false })
+            .range(from, to)
+          return { data: (data ?? []) as AlertRecord[], error }
+        })
       },
     },
     tokens: {
@@ -139,6 +147,17 @@ export function createProductionDependencies(
     ai,
     publicLiveKitUrl: config.liveKitUrl,
     makeCode: randomSixDigitCode,
+  }
+}
+
+export async function collectAllAlerts(loadPage: AlertPageLoader): Promise<AlertRecord[]> {
+  const alerts: AlertRecord[] = []
+  for (let from = 0;; from += ALERT_PAGE_SIZE) {
+    const { data, error } = await loadPage(from, from + ALERT_PAGE_SIZE - 1)
+    if (error) throw new Error('Unable to list alerts')
+    const page = data ?? []
+    alerts.push(...page)
+    if (page.length < ALERT_PAGE_SIZE) return alerts
   }
 }
 

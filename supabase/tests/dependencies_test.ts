@@ -1,5 +1,6 @@
 import { strict as assert } from 'node:assert'
 import {
+  collectAllAlerts,
   createAnthropicClient,
   createProductionDependencies,
   readProductionConfig,
@@ -82,6 +83,33 @@ Deno.test('production LiveKit token contains a microphone-only volunteer grant',
   assert.equal(payload.sub, 'volunteer:小王')
   assert.equal(payload.video.room, '482913')
   assert.deepEqual(payload.video.canPublishSources, ['microphone'])
+})
+
+Deno.test('alert history pagination returns every record without a silent cap', async () => {
+  const ranges: Array<[number, number]> = []
+  const firstPage = Array.from({ length: 1_000 }, (_, index) => ({
+    id: index + 1,
+    ts: `2026-08-29T06:${String(index % 60).padStart(2, '0')}:00.000Z`,
+    severity: 'warn' as const,
+    transcript: `transcript-${index + 1}`,
+    reason: `reason-${index + 1}`,
+  }))
+  const finalRecord = {
+    id: 1_001,
+    ts: '2026-08-29T05:00:00.000Z',
+    severity: 'freeze' as const,
+    transcript: 'final transcript',
+    reason: 'final reason',
+  }
+
+  const alerts = await collectAllAlerts(async (from, to) => {
+    ranges.push([from, to])
+    return { data: from === 0 ? firstPage : [finalRecord], error: null }
+  })
+
+  assert.equal(alerts.length, 1_001)
+  assert.deepEqual(alerts.at(-1), finalRecord)
+  assert.deepEqual(ranges, [[0, 999], [1_000, 1_999]])
 })
 
 function decodeBase64Url(value: string): string {

@@ -24,18 +24,18 @@ function AlertsPage({ api, sessionId }: AlertsPageProps) {
 
   useEffect(() => {
     if (!resolvedSessionId) return
-    let current = true
+    let isActive = true
     configuredApi.listAlerts(resolvedSessionId)
       .then((records) => {
-        if (current) setAlerts(records)
+        if (isActive) setAlerts(records)
       })
       .catch(() => {
-        if (current) setError('暂时无法读取告警记录，请稍后重试')
+        if (isActive) setError('暂时无法读取告警记录，请稍后重试')
       })
       .finally(() => {
-        if (current) setLoading(false)
+        if (isActive) setLoading(false)
       })
-    return () => { current = false }
+    return () => { isActive = false }
   }, [configuredApi, resolvedSessionId])
 
   return (

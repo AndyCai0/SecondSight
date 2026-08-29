@@ -1,10 +1,21 @@
+import AppKit
 import SwiftUI
 
 @main
 struct SecondSightApp: App {
+    @NSApplicationDelegateAdaptor(SecondSightApplicationDelegate.self) private var appDelegate
     @StateObject private var model = AppModel()
 
     var body: some Scene {
+        WindowGroup("第二双眼睛") {
+            MenuContentView(model: model)
+                .onAppear {
+                    NSApp.activate(ignoringOtherApps: true)
+                }
+        }
+        .defaultSize(width: 520, height: 690)
+        .windowResizability(.contentSize)
+
         MenuBarExtra("第二双眼睛", systemImage: "eye.circle.fill") {
             MenuContentView(model: model)
         }
@@ -14,6 +25,14 @@ struct SecondSightApp: App {
             PermissionGuideView(manager: model.permissions)
                 .frame(minWidth: 620, minHeight: 520)
         }
+    }
+}
+
+@MainActor
+final class SecondSightApplicationDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
     }
 }
 

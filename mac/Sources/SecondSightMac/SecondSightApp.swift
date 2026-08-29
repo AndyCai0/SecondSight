@@ -9,15 +9,17 @@ struct SecondSightApp: App {
     var body: some Scene {
         WindowGroup("第二双眼睛") {
             MenuContentView(model: model)
+                .frame(minWidth: 520, minHeight: 560)
                 .onAppear {
                     NSApp.activate(ignoringOtherApps: true)
                 }
         }
         .defaultSize(width: 520, height: 760)
-        .windowResizability(.contentSize)
+        .windowResizability(.contentMinSize)
 
         MenuBarExtra("第二双眼睛", systemImage: "eye.circle.fill") {
             MenuContentView(model: model)
+                .frame(width: 520, height: 760)
         }
         .menuBarExtraStyle(.window)
     }
@@ -112,8 +114,10 @@ struct MenuContentView: View {
             }
             .padding(.horizontal, 26)
             .padding(.top, 26)
+            .frame(maxWidth: 760, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .center)
         }
-        .frame(width: 520, height: 760)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 

@@ -157,6 +157,157 @@
   line-height: 1.65;
 }
 
+.receiver-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid rgba(111, 226, 192, 0.24);
+  border-radius: 13px;
+  background: rgba(111, 226, 192, 0.07);
+}
+
+.receiver-status > i {
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--mint);
+  box-shadow: 0 0 0 5px rgba(111, 226, 192, 0.08), 0 0 18px var(--mint);
+  animation: receiver-pulse 1.4s ease-in-out infinite;
+}
+
+.receiver-status span,
+.receiver-status strong,
+.receiver-status small {
+  display: block;
+}
+
+.receiver-status strong {
+  color: #c9f3e6;
+  font-size: 13px;
+}
+
+.receiver-status small {
+  margin-top: 3px;
+  color: #78948d;
+  font-size: 11px;
+}
+
+.receiver-status--reconnecting,
+.receiver-status--unavailable {
+  border-color: rgba(240, 181, 100, 0.28);
+  background: rgba(240, 181, 100, 0.07);
+}
+
+.receiver-status--reconnecting > i,
+.receiver-status--unavailable > i {
+  background: #f0b564;
+  box-shadow: 0 0 0 5px rgba(240, 181, 100, 0.08);
+}
+
+.receiver-status--reconnecting strong,
+.receiver-status--unavailable strong {
+  color: #f1c88e;
+}
+
+.broadcast-list {
+  max-height: 230px;
+  margin-top: 14px;
+  overflow-y: auto;
+}
+
+.broadcast-list__heading,
+.broadcast-card,
+.broadcast-card > div {
+  display: flex;
+  align-items: center;
+}
+
+.broadcast-list__heading {
+  justify-content: space-between;
+  margin: 0 2px 9px;
+}
+
+.broadcast-list__heading h3 {
+  margin: 0;
+  color: #dbe9e5;
+  font-size: 13px;
+}
+
+.broadcast-list__heading span {
+  color: var(--mint);
+  font-size: 11px;
+}
+
+.broadcast-card {
+  justify-content: space-between;
+  gap: 14px;
+  padding: 13px 14px;
+  border: 1px solid rgba(255, 137, 116, 0.24);
+  border-radius: 12px;
+  background: rgba(255, 137, 116, 0.06);
+}
+
+.broadcast-card + .broadcast-card {
+  margin-top: 8px;
+}
+
+.broadcast-card > div {
+  min-width: 0;
+  align-items: flex-start;
+  flex-direction: column;
+}
+
+.broadcast-card strong {
+  color: #ffe1da;
+  font-size: 12px;
+}
+
+.broadcast-card time {
+  margin-top: 4px;
+  color: #9e7e78;
+  font-size: 10px;
+}
+
+.broadcast-card button {
+  flex: 0 0 auto;
+  padding: 9px 12px;
+  border: 0;
+  border-radius: 9px;
+  color: #32110c;
+  background: var(--coral);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.broadcast-card button:disabled {
+  cursor: wait;
+  opacity: 0.58;
+}
+
+.join-divider {
+  margin: 22px 0 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #647b75;
+  font-size: 11px;
+}
+
+.join-divider::before,
+.join-divider::after {
+  height: 1px;
+  flex: 1;
+  background: var(--line);
+  content: "";
+}
+
+@keyframes receiver-pulse {
+  0%, 100% { opacity: 0.5; transform: scale(0.85); }
+  50% { opacity: 1; transform: scale(1); }
+}
+
 .join-card form {
   display: grid;
 }
@@ -314,23 +465,64 @@
   background-size: 40px 40px;
 }
 
-.video-stage video,
-.video-stage canvas {
+.video-stage > video,
+.video-stage > canvas {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
 }
 
-.video-stage video {
+.video-stage > video {
   z-index: 1;
   object-fit: contain;
   background: #050c0b;
 }
 
-.video-stage canvas {
+.video-stage > canvas {
   z-index: 3;
   touch-action: none;
+}
+
+.elder-camera-pip {
+  position: absolute;
+  z-index: 4;
+  right: clamp(14px, 2vw, 28px);
+  bottom: clamp(14px, 2vw, 28px);
+  width: clamp(190px, 22vw, 320px);
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border: 3px solid rgba(255, 255, 255, 0.88);
+  border-radius: 16px;
+  background: #0d1b19;
+  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.48);
+  pointer-events: none;
+}
+
+.elder-camera-pip video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.elder-camera-pip span {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #8ea59f;
+  font-size: 12px;
+}
+
+.elder-camera-pip strong {
+  position: absolute;
+  left: 10px;
+  bottom: 9px;
+  padding: 5px 9px;
+  border-radius: 7px;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.68);
+  font-size: 12px;
 }
 
 .waiting-media {

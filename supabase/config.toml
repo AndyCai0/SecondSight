@@ -17,3 +17,12 @@ verify_jwt = true
 
 [functions.list-alerts]
 verify_jwt = true
+
+[functions.broadcast-session]
+verify_jwt = true
+
+[functions.assistant-poll]
+verify_jwt = true
+
+[functions.claim-broadcast]
+verify_jwt = true

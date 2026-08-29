@@ -35,15 +35,19 @@
   （体验降级但通路保住），退路触发条件 = Day 1 上午结束仍未推流成功。
 
 ### A4. 打码管线（核心卖点，不可裁）
-两层，全部确定性逻辑，禁止引入 OCR/视觉模型:
+三层，全部确定性逻辑，禁止引入 OCR/视觉模型:
 
-1. **AX 扫描**（独立 5 Hz 定时器）:AXUIElement 遍历焦点应用窗口控件树，
-   收集 (a) role == secure text field 的控件 (b) 普通文本框但 title/placeholder
-   命中敏感词（password/密码/PIN/验证码/card/CVV）的控件;取 `AXFrame`，
+1. **AX 焦点事件 + 5 Hz 扫描兜底**:AXUIElement 遍历焦点应用窗口控件树，
+   收集 (a) 当前获得焦点的所有可编辑控件 (b) 已有非空值的可编辑控件
+   (c) secure text field (d) title/placeholder 命中敏感词的普通文本框，以及
+   焦点输入框附近的密码/自动填充候选窗口；跨进程候选无法定位时先保护输入框下方
+   的常见候选区域；取 `AXFrame`，
    换算 AX 坐标系(左上原点/点) → 采集帧像素坐标（注意 Retina scale 和多分辨率），
-   每个矩形外扩 8px，写入线程安全的 `currentRedactionRects`。
+   每个矩形外扩 8px，写入线程安全的 `currentRedactionRects`。只判断值是否为空，
+   不保存、记录或发出用户输入内容。
 2. **整屏兜底**:轮询 `IsSecureEventInputEnabled()`;为 true 且当前无对应
    遮蔽矩形时，整帧替换为占位图（灰底大字"正在输入敏感信息，画面已暂停"）。
+   AX 权限不可用或扫描尚未就绪时也必须整屏占位，不允许原帧直接放行。
 3. 每帧发布前用纯色块（黑）覆盖矩形（CoreImage 或直接改 pixel buffer，
    以性能稳定为准）。
 

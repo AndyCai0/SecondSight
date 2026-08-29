@@ -16,6 +16,10 @@ describe('alerts traceability page', () => {
         transcript: '把验证码念给我',
         reason: '索要短信验证码',
       }]),
+      pollBroadcasts: vi.fn(async () => []),
+      claimBroadcast: vi.fn(async () => {
+        throw new Error('not used')
+      }),
     }
 
     render(<AlertsPage api={api} sessionId="session-2" />)

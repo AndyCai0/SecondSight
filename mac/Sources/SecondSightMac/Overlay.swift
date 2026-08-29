@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import LiveKit
 import SecondSightCore
 import SwiftUI
 
@@ -21,6 +22,7 @@ final class OverlayModel: ObservableObject {
     @Published var annotations: [OverlayAnnotation] = []
     @Published var warning: String?
     @Published var frozenReason: String?
+    @Published private(set) var volunteerCameraTrack: RemoteVideoTrack?
     var onResume: (() -> Void)?
     private var cleanupTimer: Timer?
     private var warningTask: Task<Void, Never>?
@@ -68,6 +70,8 @@ final class OverlayModel: ObservableObject {
 
     func freeze(reason: String) { frozenReason = reason }
     func resume() { frozenReason = nil }
+    func showVolunteerCamera(_ track: RemoteVideoTrack) { volunteerCameraTrack = track }
+    func hideVolunteerCamera() { volunteerCameraTrack = nil }
 
     private func upsert(_ item: OverlayAnnotation) {
         annotations.removeAll { $0.id == item.id }
@@ -102,6 +106,35 @@ struct OverlayView: View {
                     Spacer()
                 }
                 .padding(.top, 48)
+            }
+            if let track = model.volunteerCameraTrack {
+                VStack {
+                    Spacer()
+                    HStack {
+                        Spacer()
+                        VStack(alignment: .leading, spacing: 0) {
+                            SwiftUIVideoView(track, layoutMode: .fill)
+                                .frame(width: 320, height: 180)
+                                .clipped()
+                            Text("帮助您的人")
+                                .font(.system(size: 22, weight: .bold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 16)
+                                .frame(height: 48)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(.black.opacity(0.82))
+                        }
+                        .frame(width: 320)
+                        .background(.black)
+                        .clipShape(RoundedRectangle(cornerRadius: 18))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 18)
+                                .stroke(.white.opacity(0.9), lineWidth: 3)
+                        }
+                        .shadow(color: .black.opacity(0.45), radius: 18, y: 8)
+                    }
+                }
+                .padding(32)
             }
             if let reason = model.frozenReason {
                 VStack(spacing: 32) {
@@ -187,5 +220,6 @@ final class OverlayWindowController {
     func close() {
         window?.close()
         window = nil
+        model.hideVolunteerCamera()
     }
 }

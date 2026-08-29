@@ -1,9 +1,11 @@
-import { act, render, screen } from '@testing-library/react'
+import { act, cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 import type { SecondSightApi } from './api'
 import type { ConnectVolunteerSession, LiveSessionEvents, VolunteerSession } from './transport'
+
+afterEach(cleanup)
 
 describe('volunteer app', () => {
   it('joins a room, keeps the no-control promise visible, and mirrors an elder freeze', async () => {
@@ -18,6 +20,10 @@ describe('volunteer app', () => {
       }),
       logEvent: vi.fn(async () => undefined),
       listAlerts: vi.fn(async () => []),
+      pollBroadcasts: vi.fn(async () => []),
+      claimBroadcast: vi.fn(async () => {
+        throw new Error('not used')
+      }),
     }
     let events: LiveSessionEvents | undefined
     const session: VolunteerSession = {
@@ -43,9 +49,69 @@ describe('volunteer app', () => {
       'href',
       '/alerts.html?session_id=session-1',
     )
+    expect(screen.getByLabelText('长辈摄像头浮窗')).toBeInTheDocument()
+    expect(session.attachMedia).toHaveBeenCalledWith(
+      expect.any(HTMLVideoElement),
+      expect.any(HTMLVideoElement),
+      expect.any(HTMLAudioElement),
+    )
 
     act(() => events?.onFreeze('检测到索要验证码'))
     expect(screen.getByRole('alertdialog')).toHaveTextContent('会话已被 AI 安全助手暂停')
     expect(screen.getByRole('alertdialog')).toHaveTextContent('检测到索要验证码')
+  })
+
+  it('reports presence, shows the receiving state, and claims an elder broadcast', async () => {
+    const api: SecondSightApi = {
+      joinSession: vi.fn(async () => {
+        throw new Error('not used')
+      }),
+      createSession: vi.fn(async () => {
+        throw new Error('not used')
+      }),
+      logEvent: vi.fn(async () => undefined),
+      listAlerts: vi.fn(async () => []),
+      pollBroadcasts: vi.fn(async () => [{
+        sessionId: '9d1d5434-6da5-41e0-af70-c5aa35c6816f',
+        requestedAt: '2026-08-29T10:00:00.000Z',
+        elderLabel: '李奶奶',
+      }]),
+      claimBroadcast: vi.fn(async () => ({
+        sessionId: '9d1d5434-6da5-41e0-af70-c5aa35c6816f',
+        liveKitUrl: 'wss://demo.livekit.cloud',
+        liveKitToken: 'claimed-volunteer-jwt',
+      })),
+    }
+    const session: VolunteerSession = {
+      attachMedia: vi.fn(),
+      send: vi.fn(async () => undefined),
+      disconnect: vi.fn(async () => undefined),
+    }
+    const connectSession: ConnectVolunteerSession = vi.fn(async () => session)
+    const user = userEvent.setup()
+
+    render(<App api={api} connectSession={connectSession} />)
+
+    expect(await screen.findByText('正在接收广播')).toBeInTheDocument()
+    expect(await screen.findByText('李奶奶正在等待帮助')).toBeInTheDocument()
+    expect(api.pollBroadcasts).toHaveBeenCalledWith({
+      assistantId: expect.any(String),
+      name: '待命助手',
+    })
+
+    await user.type(screen.getByLabelText('你的昵称'), '小王')
+    await user.click(screen.getByRole('button', { name: '响应求助' }))
+
+    expect(await screen.findByText('正在协助')).toBeInTheDocument()
+    expect(screen.getByText('在线求助已接通')).toBeInTheDocument()
+    expect(api.claimBroadcast).toHaveBeenCalledWith({
+      sessionId: '9d1d5434-6da5-41e0-af70-c5aa35c6816f',
+      assistantId: expect.any(String),
+      name: '小王',
+    })
+    expect(connectSession).toHaveBeenCalledWith(
+      expect.objectContaining({ liveKitToken: 'claimed-volunteer-jwt' }),
+      expect.any(Object),
+    )
   })
 })

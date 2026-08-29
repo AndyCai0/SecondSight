@@ -8,6 +8,9 @@ Deno.test('all deployable Edge Function modules export a fetch handler', async (
     import('../functions/ai-referee/index.ts'),
     import('../functions/list-alerts/index.ts'),
     import('../functions/log-event/index.ts'),
+    import('../functions/broadcast-session/index.ts'),
+    import('../functions/assistant-poll/index.ts'),
+    import('../functions/claim-broadcast/index.ts'),
   ])
 
   for (const module of modules) {

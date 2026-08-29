@@ -20,7 +20,9 @@ type TimedAnnotation = (CircleAnnotation | ArrowAnnotation) & { expiresAt: numbe
 
 interface AnnotationSurfaceProps {
   videoRef: RefObject<HTMLVideoElement | null>
-  hasMedia: boolean
+  elderCameraRef: RefObject<HTMLVideoElement | null>
+  hasScreenShare: boolean
+  hasElderCamera: boolean
   disabled?: boolean
   send(message: VolunteerOutboundMessage): Promise<void>
   log(message: VolunteerOutboundMessage): void
@@ -29,7 +31,9 @@ interface AnnotationSurfaceProps {
 
 export function AnnotationSurface({
   videoRef,
-  hasMedia,
+  elderCameraRef,
+  hasScreenShare,
+  hasElderCamera,
   disabled = false,
   send,
   log,
@@ -239,7 +243,12 @@ export function AnnotationSurface({
             setDragEnd(null)
           }}
         />
-        {!hasMedia && <div className="waiting-media">等待长辈分享画面…</div>}
+        <div className="elder-camera-pip" aria-label="长辈摄像头浮窗">
+          <video ref={elderCameraRef} autoPlay playsInline muted aria-label="长辈摄像头画面" />
+          {!hasElderCamera && <span>等待长辈摄像头…</span>}
+          <strong>长辈</strong>
+        </div>
+        {!hasScreenShare && <div className="waiting-media">等待长辈分享画面…</div>}
       </div>
       <div className="annotation-toolbar" role="toolbar" aria-label="标注工具">
         <button className={tool === 'circle' ? 'selected' : ''} onClick={() => setTool('circle')} disabled={disabled}>

@@ -3,7 +3,7 @@ import {
   RoomEvent,
   Track,
   type LocalParticipant,
-  type RemoteTrack,
+  type RemoteTrackPublication,
 } from 'livekit-client'
 import type { JoinedSession } from './api'
 import {
@@ -21,11 +21,16 @@ export interface LiveSessionEvents {
   onFreeze(reason: string): void
   onResume(): void
   onDisconnected(): void
-  onMediaChanged(): void
+  onScreenShareChanged(available: boolean): void
+  onElderCameraChanged(available: boolean): void
 }
 
 export interface VolunteerSession {
-  attachMedia(video: HTMLVideoElement, audio: HTMLAudioElement): void
+  attachMedia(
+    screenVideo: HTMLVideoElement,
+    elderCameraVideo: HTMLVideoElement,
+    audio: HTMLAudioElement,
+  ): void
   send(message: VolunteerOutboundMessage): Promise<void>
   disconnect(): Promise<void>
 }
@@ -46,25 +51,42 @@ export async function publishContractMessage(
 
 export const connectVolunteerSession: ConnectVolunteerSession = async (joined, events) => {
   const room = new Room({ adaptiveStream: true, dynacast: true })
-  let videoElement: HTMLVideoElement | null = null
+  let screenVideoElement: HTMLVideoElement | null = null
+  let elderCameraVideoElement: HTMLVideoElement | null = null
   let audioElement: HTMLAudioElement | null = null
 
-  function attachTrack(track: RemoteTrack): void {
-    if (track.kind === Track.Kind.Video && videoElement) track.attach(videoElement)
-    if (track.kind === Track.Kind.Audio && audioElement) track.attach(audioElement)
-    events.onMediaChanged()
+  function attachPublication(publication: RemoteTrackPublication): void {
+    const track = publication.track
+    if (!track) return
+    if (track.kind === Track.Kind.Audio && audioElement) {
+      track.attach(audioElement)
+      return
+    }
+    if (track.kind !== Track.Kind.Video) return
+    if (publication.source === Track.Source.ScreenShare && screenVideoElement) {
+      track.attach(screenVideoElement)
+      events.onScreenShareChanged(true)
+    } else if (publication.source === Track.Source.Camera && elderCameraVideoElement) {
+      track.attach(elderCameraVideoElement)
+      events.onElderCameraChanged(true)
+    }
   }
 
   function attachElderTracks(): void {
     const elder = room.remoteParticipants.get('elder')
     if (!elder) return
     for (const publication of elder.trackPublications.values()) {
-      if (publication.track) attachTrack(publication.track)
+      attachPublication(publication)
     }
   }
 
-  room.on(RoomEvent.TrackSubscribed, (track, _publication, participant) => {
-    if (participant.identity === 'elder') attachTrack(track)
+  room.on(RoomEvent.TrackSubscribed, (_track, publication, participant) => {
+    if (participant.identity === 'elder') attachPublication(publication)
+  })
+  room.on(RoomEvent.TrackUnsubscribed, (_track, publication, participant) => {
+    if (participant.identity !== 'elder') return
+    if (publication.source === Track.Source.ScreenShare) events.onScreenShareChanged(false)
+    if (publication.source === Track.Source.Camera) events.onElderCameraChanged(false)
   })
   room.on(RoomEvent.DataReceived, (payload, participant) => {
     if (participant?.identity !== 'elder') return
@@ -80,15 +102,19 @@ export const connectVolunteerSession: ConnectVolunteerSession = async (joined, e
 
   try {
     await room.connect(joined.liveKitUrl, joined.liveKitToken)
-    await room.localParticipant.setMicrophoneEnabled(true)
+    await Promise.all([
+      room.localParticipant.setMicrophoneEnabled(true),
+      room.localParticipant.setCameraEnabled(true),
+    ])
   } catch (error) {
     await room.disconnect()
     throw error
   }
 
   return {
-    attachMedia(video, audio) {
-      videoElement = video
+    attachMedia(screenVideo, elderCameraVideo, audio) {
+      screenVideoElement = screenVideo
+      elderCameraVideoElement = elderCameraVideo
       audioElement = audio
       attachElderTracks()
     },

@@ -24,3 +24,16 @@ Deno.test('automatic RLS helper is not exposed through the Data API', async () =
     /revoke\s+execute\s+on\s+function\s+public\.rls_auto_enable\(\)\s+from\s+public,\s*anon,\s*authenticated/i,
   )
 })
+
+Deno.test('broadcast discovery migration keeps presence private and claimable sessions indexed', async () => {
+  const sql = await Deno.readTextFile(
+    new URL('../migrations/20260829113414_volunteer_broadcast_discovery.sql', import.meta.url),
+  )
+
+  assert.match(sql, /add column broadcast_active boolean not null default false/i)
+  assert.match(sql, /add column broadcast_started_at timestamptz/i)
+  assert.match(sql, /create table public\.assistant_presence/i)
+  assert.match(sql, /alter table public\.assistant_presence enable row level security/i)
+  assert.doesNotMatch(sql, /create\s+policy/i)
+  assert.match(sql, /where broadcast_active and status = 'waiting'/i)
+})

@@ -14,12 +14,18 @@ export interface AlertRecord {
   reason: string
 }
 
+export interface BroadcastRecord {
+  sessionId: string
+  requestedAt: string
+  elderLabel: string
+}
+
 export interface TokenGrant {
   identity: string
   room: string
   canPublish: boolean
   canSubscribe: boolean
-  canPublishSources?: readonly string[]
+  canPublishSources?: readonly ('microphone' | 'camera')[]
 }
 
 export interface EdgeDependencies {
@@ -46,6 +52,16 @@ export interface EdgeDependencies {
     }): Promise<void>
     list(sessionId: string): Promise<AlertRecord[]>
   }
+  assistants: {
+    touch(input: { id: string; displayName: string; seenAt: string }): Promise<void>
+    countSince(cutoff: string): Promise<number>
+  }
+  broadcasts: {
+    setActive(sessionId: string, isActive: boolean, startedAt: string): Promise<boolean>
+    listActive(cutoff: string): Promise<BroadcastRecord[]>
+    findClaimable(sessionId: string, cutoff: string): Promise<SessionRecord | null>
+    claim(sessionId: string, volunteerName: string, cutoff: string): Promise<boolean>
+  }
   tokens: {
     sign(grant: TokenGrant): Promise<string>
   }
@@ -66,6 +82,7 @@ export interface EdgeDependencies {
   }
   publicLiveKitUrl: string
   makeCode(): string
+  now(): Date
 }
 
 export type EdgeFunctionName =
@@ -75,11 +92,36 @@ export type EdgeFunctionName =
   | 'ai-referee'
   | 'list-alerts'
   | 'log-event'
+  | 'broadcast-session'
+  | 'assistant-poll'
+  | 'claim-broadcast'
 
 export class SessionCodeConflictError extends Error {
   constructor() {
     super('Session code already exists')
     this.name = 'SessionCodeConflictError'
+  }
+}
+
+export class AIUnavailableError extends Error {
+  constructor() {
+    super('AI features are not enabled')
+    this.name = 'AIUnavailableError'
+  }
+}
+
+export type ServerOperationErrorCode =
+  | 'SERVER_CONFIGURATION_ERROR'
+  | 'SERVER_DATABASE_ERROR'
+  | 'SERVER_TOKEN_SIGNING_ERROR'
+
+export class ServerOperationError extends Error {
+  constructor(
+    public readonly code: ServerOperationErrorCode,
+    public readonly providerCode?: string,
+  ) {
+    super(code)
+    this.name = 'ServerOperationError'
   }
 }
 
@@ -93,6 +135,100 @@ export async function handleEdgeRequest(
   }
   if (request.method !== 'POST') {
     return jsonResponse({ error: 'Method not allowed' }, 405)
+  }
+
+  if (functionName === 'broadcast-session') {
+    const body = await readObject(request)
+    const sessionId = stringField(body, 'session_id').trim()
+    const isActive = body.is_active
+    if (!isUuid(sessionId) || typeof isActive !== 'boolean') {
+      return jsonResponse({ error: 'Invalid broadcast request' }, 400)
+    }
+
+    const now = dependencies.now()
+    const updated = await dependencies.broadcasts.setActive(
+      sessionId,
+      isActive,
+      now.toISOString(),
+    )
+    if (!updated) {
+      return jsonResponse({ error: 'Session is not available for broadcast' }, 409)
+    }
+    if (!isActive) return jsonResponse({ ok: true })
+
+    const notifiedAssistants = await dependencies.assistants.countSince(
+      new Date(now.getTime() - ASSISTANT_PRESENCE_TTL_MS).toISOString(),
+    )
+    return jsonResponse({ ok: true, notified_assistants: notifiedAssistants })
+  }
+
+  if (functionName === 'assistant-poll') {
+    const body = await readObject(request)
+    const assistantId = stringField(body, 'assistant_id').trim()
+    const displayName = stringField(body, 'name').trim()
+    if (!isUuid(assistantId) || displayName.length === 0 || displayName.length > 40) {
+      return jsonResponse({ error: 'Invalid assistant presence' }, 400)
+    }
+
+    const now = dependencies.now()
+    await dependencies.assistants.touch({
+      id: assistantId,
+      displayName,
+      seenAt: now.toISOString(),
+    })
+    const broadcasts = await dependencies.broadcasts.listActive(
+      new Date(now.getTime() - BROADCAST_TTL_MS).toISOString(),
+    )
+    return jsonResponse({
+      broadcasts: broadcasts.map((broadcast) => ({
+        session_id: broadcast.sessionId,
+        requested_at: broadcast.requestedAt,
+        elder_label: broadcast.elderLabel,
+      })),
+    })
+  }
+
+  if (functionName === 'claim-broadcast') {
+    const body = await readObject(request)
+    const sessionId = stringField(body, 'session_id').trim()
+    const assistantId = stringField(body, 'assistant_id').trim()
+    const name = stringField(body, 'name').trim()
+    if (!isUuid(sessionId) || !isUuid(assistantId) || name.length === 0 || name.length > 40) {
+      return jsonResponse({ error: 'Invalid broadcast claim' }, 400)
+    }
+
+    const now = dependencies.now()
+    const cutoff = new Date(now.getTime() - BROADCAST_TTL_MS).toISOString()
+    await dependencies.assistants.touch({
+      id: assistantId,
+      displayName: name,
+      seenAt: now.toISOString(),
+    })
+    const session = await dependencies.broadcasts.findClaimable(sessionId, cutoff)
+    if (!session) {
+      return jsonResponse({ error: 'Broadcast has already been claimed or expired' }, 409)
+    }
+
+    // Signing before the conditional update prevents a provider outage from
+    // leaving the elder session claimed without a usable token. A race loser
+    // never receives its unused token.
+    const token = await dependencies.tokens.sign({
+      identity: `volunteer:${name}`,
+      room: session.code,
+      canPublish: true,
+      canSubscribe: true,
+      canPublishSources: ['microphone', 'camera'],
+    })
+    const claimed = await dependencies.broadcasts.claim(session.id, name, cutoff)
+    if (!claimed) {
+      return jsonResponse({ error: 'Broadcast has already been claimed or expired' }, 409)
+    }
+
+    return jsonResponse({
+      session_id: session.id,
+      lk_url: dependencies.publicLiveKitUrl,
+      lk_token: token,
+    })
   }
 
   if (functionName === 'ai-guide') {
@@ -190,6 +326,9 @@ export async function handleEdgeRequest(
     if (session.status === 'frozen') {
       return jsonResponse({ error: 'Session is frozen' }, 423)
     }
+    if (session.status === 'active') {
+      return jsonResponse({ error: 'Session already has a volunteer' }, 409)
+    }
 
     const activated = await dependencies.sessions.activate(session.id, name)
     if (!activated) {
@@ -200,7 +339,7 @@ export async function handleEdgeRequest(
       room: code,
       canPublish: true,
       canSubscribe: true,
-      canPublishSources: ['microphone'],
+      canPublishSources: ['microphone', 'camera'],
     })
 
     return jsonResponse({
@@ -287,3 +426,11 @@ function stringField(body: Record<string, unknown>, key: string): string {
 function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
+
+function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+    .test(value)
+}
+
+const ASSISTANT_PRESENCE_TTL_MS = 3_000
+const BROADCAST_TTL_MS = 15 * 60 * 1_000

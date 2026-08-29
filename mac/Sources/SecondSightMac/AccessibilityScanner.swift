@@ -1,4 +1,5 @@
 import ApplicationServices
+import AppKit
 import Carbon.HIToolbox
 import CoreGraphics
 import Foundation
@@ -7,12 +8,18 @@ import SecondSightCore
 struct RedactionSnapshot: Sendable {
     let axRects: [CGRect]
     let secureInputEnabled: Bool
+    let protectionUnavailable: Bool
     let axSummary: String?
 }
 
 final class RedactionSnapshotStore: @unchecked Sendable {
     private let lock = NSLock()
-    private var value = RedactionSnapshot(axRects: [], secureInputEnabled: false, axSummary: nil)
+    private var value = RedactionSnapshot(
+        axRects: [],
+        secureInputEnabled: false,
+        protectionUnavailable: true,
+        axSummary: nil
+    )
 
     func update(_ snapshot: RedactionSnapshot) {
         lock.lock()
@@ -37,6 +44,21 @@ final class AccessibilityScanner: @unchecked Sendable {
     let store: RedactionSnapshotStore
     private let queue = DispatchQueue(label: "study.secondsight.ax-scanner", qos: .userInitiated)
     private var timer: DispatchSourceTimer?
+    private var isRunning = false
+    private var focusedApplicationObserver: AXObserver?
+    private var observedProcessID: pid_t?
+    private var workspaceActivationObserver: NSObjectProtocol?
+
+    private struct SummaryNode {
+        var payload: [String: Any]
+        let frame: CGRect?
+    }
+
+    private static let observerCallback: AXObserverCallback = { _, _, _, refcon in
+        guard let refcon else { return }
+        let scanner = Unmanaged<AccessibilityScanner>.fromOpaque(refcon).takeUnretainedValue()
+        scanner.requestScan()
+    }
 
     init(store: RedactionSnapshotStore = RedactionSnapshotStore()) {
         self.store = store
@@ -45,6 +67,14 @@ final class AccessibilityScanner: @unchecked Sendable {
     func start() {
         queue.sync {
             guard timer == nil else { return }
+            isRunning = true
+            workspaceActivationObserver = NSWorkspace.shared.notificationCenter.addObserver(
+                forName: NSWorkspace.didActivateApplicationNotification,
+                object: nil,
+                queue: nil
+            ) { [weak self] _ in
+                self?.requestScan()
+            }
             let timer = DispatchSource.makeTimerSource(queue: queue)
             timer.schedule(deadline: .now(), repeating: Self.interval, leeway: .milliseconds(30))
             timer.setEventHandler { [weak self] in
@@ -60,19 +90,35 @@ final class AccessibilityScanner: @unchecked Sendable {
 
     func stop() {
         queue.sync {
+            isRunning = false
             timer?.setEventHandler {}
             timer?.cancel()
             timer = nil
+            if let workspaceActivationObserver {
+                NSWorkspace.shared.notificationCenter.removeObserver(workspaceActivationObserver)
+                self.workspaceActivationObserver = nil
+            }
+            removeFocusedApplicationObserver()
             let system = AXUIElementCreateSystemWide()
             AXUIElementSetMessagingTimeout(system, 0)
-            store.update(RedactionSnapshot(axRects: [], secureInputEnabled: false, axSummary: nil))
+            store.update(RedactionSnapshot(
+                axRects: [],
+                secureInputEnabled: false,
+                protectionUnavailable: true,
+                axSummary: nil
+            ))
         }
     }
 
     private func scan() {
         let secureInput = IsSecureEventInputEnabled()
         guard AXIsProcessTrusted() else {
-            store.update(RedactionSnapshot(axRects: [], secureInputEnabled: secureInput, axSummary: nil))
+            store.update(RedactionSnapshot(
+                axRects: [],
+                secureInputEnabled: secureInput,
+                protectionUnavailable: true,
+                axSummary: nil
+            ))
             return
         }
 
@@ -82,12 +128,19 @@ final class AccessibilityScanner: @unchecked Sendable {
         // reset in stop().
         AXUIElementSetMessagingTimeout(system, Self.messagingTimeout)
         guard let app = elementAttribute(system, kAXFocusedApplicationAttribute as CFString) else {
-            store.update(RedactionSnapshot(axRects: [], secureInputEnabled: secureInput, axSummary: nil))
+            store.update(RedactionSnapshot(
+                axRects: [],
+                secureInputEnabled: secureInput,
+                protectionUnavailable: true,
+                axSummary: nil
+            ))
             return
         }
+        refreshFocusedApplicationObserver(for: app)
         let deadline = DispatchTime.now().uptimeNanoseconds + Self.maximumScanDurationNanoseconds
         var roots: [AXUIElement] = []
-        if let focusedElement = elementAttribute(app, kAXFocusedUIElementAttribute as CFString) {
+        let focusedElement = elementAttribute(app, kAXFocusedUIElementAttribute as CFString)
+        if let focusedElement {
             roots.append(focusedElement)
         }
         if let focusedWindow = elementAttribute(app, kAXFocusedWindowAttribute as CFString),
@@ -99,33 +152,70 @@ final class AccessibilityScanner: @unchecked Sendable {
             roots.append(window)
         }
         var rects: [CGRect] = []
-        var summaryNodes: [[String: Any]] = []
+        var suggestionSurfaceRects: [CGRect] = []
+        var focusedInputFrame: CGRect?
+        var summaryNodes: [SummaryNode] = []
         var visited = 0
         var seen: [CFHashCode: [AXUIElement]] = [:]
         for root in roots {
             walk(
                 root,
                 depth: 0,
+                focusedElement: focusedElement,
                 deadline: deadline,
                 visited: &visited,
                 seen: &seen,
                 rects: &rects,
+                suggestionSurfaceRects: &suggestionSurfaceRects,
+                focusedInputFrame: &focusedInputFrame,
                 summary: &summaryNodes
             )
             if scanLimitReached(visited: visited, deadline: deadline) { break }
         }
-        let summary = Self.compactJSON(summaryNodes, maximumBytes: 8 * 1_024)
-        store.update(RedactionSnapshot(axRects: rects, secureInputEnabled: secureInput, axSummary: summary))
+        if let focusedInputFrame {
+            let nearbySuggestionSurfaces = suggestionSurfaceRects.filter {
+                InputPrivacyPolicy.shouldRedactSuggestionSurface($0, near: focusedInputFrame)
+            }
+            if nearbySuggestionSurfaces.isEmpty {
+                // A system password/autofill panel can be composited by a
+                // different process and therefore absent from the focused
+                // application's AX tree. Protect its normal anchor area until
+                // a concrete surface becomes available.
+                rects.append(InputPrivacyPolicy.fallbackSuggestionFrame(under: focusedInputFrame))
+            } else {
+                rects.append(contentsOf: nearbySuggestionSurfaces)
+            }
+        }
+        let redactionRects = Self.deduplicated(rects)
+        let safeSummary = summaryNodes.map { summaryNode in
+            var payload = summaryNode.payload
+            if let frame = summaryNode.frame,
+               redactionRects.contains(where: { $0.intersects(frame) }) {
+                payload.removeValue(forKey: "title")
+                payload["privacy_protected"] = true
+            }
+            return payload
+        }
+        let summary = Self.compactJSON(safeSummary, maximumBytes: 8 * 1_024)
+        store.update(RedactionSnapshot(
+            axRects: redactionRects,
+            secureInputEnabled: secureInput,
+            protectionUnavailable: false,
+            axSummary: summary
+        ))
     }
 
     private func walk(
         _ element: AXUIElement,
         depth: Int,
+        focusedElement: AXUIElement?,
         deadline: UInt64,
         visited: inout Int,
         seen: inout [CFHashCode: [AXUIElement]],
         rects: inout [CGRect],
-        summary: inout [[String: Any]]
+        suggestionSurfaceRects: inout [CGRect],
+        focusedInputFrame: inout CGRect?,
+        summary: inout [SummaryNode]
     ) {
         guard depth <= Self.maximumDepth,
               !scanLimitReached(visited: visited, deadline: deadline)
@@ -140,11 +230,28 @@ final class AccessibilityScanner: @unchecked Sendable {
         let titleParts = [attributes.title, attributes.description, attributes.placeholder].compactMap { $0 }
         let label = titleParts.joined(separator: " ")
         let frame = attributes.frame
-        if (subrole == (kAXSecureTextFieldSubrole as String) ||
-            (role == (kAXTextFieldRole as String) && SensitiveTextPolicy.isSensitiveField(label: label))),
-           let frame
-        {
+        let isFocused = attributes.isFocused || focusedElement.map { CFEqual($0, element) } == true
+        let isEditable = InputPrivacyPolicy.isEditable(
+            role: role,
+            subrole: subrole,
+            reportsEditable: attributes.isEditable
+        )
+        let hasNonEmptyValue = isEditable && elementHasNonEmptyTextValue(element)
+        let shouldRedactInput = InputPrivacyPolicy.shouldRedactEditable(
+            role: role,
+            subrole: subrole,
+            reportsEditable: attributes.isEditable,
+            isFocused: isFocused,
+            hasNonEmptyValue: hasNonEmptyValue
+        ) || (role == (kAXTextFieldRole as String) && SensitiveTextPolicy.isSensitiveField(label: label))
+        if shouldRedactInput, let frame {
             rects.append(frame)
+        }
+        if isEditable, isFocused, let frame {
+            focusedInputFrame = frame
+        }
+        if InputPrivacyPolicy.isSuggestionSurface(role: role), let frame {
+            suggestionSurfaceRects.append(frame)
         }
 
         if depth <= 4, summary.count < 350 {
@@ -155,16 +262,19 @@ final class AccessibilityScanner: @unchecked Sendable {
                 node["frame"] = ["x": frame.minX, "y": frame.minY, "w": frame.width, "h": frame.height]
             }
             node["depth"] = depth
-            summary.append(node)
+            summary.append(SummaryNode(payload: node, frame: frame))
         }
         for child in attributes.children {
             walk(
                 child,
                 depth: depth + 1,
+                focusedElement: focusedElement,
                 deadline: deadline,
                 visited: &visited,
                 seen: &seen,
                 rects: &rects,
+                suggestionSurfaceRects: &suggestionSurfaceRects,
+                focusedInputFrame: &focusedInputFrame,
                 summary: &summary
             )
             if scanLimitReached(visited: visited, deadline: deadline) { return }
@@ -182,6 +292,8 @@ final class AccessibilityScanner: @unchecked Sendable {
         let description: String?
         let placeholder: String?
         let frame: CGRect?
+        let isFocused: Bool
+        let isEditable: Bool
         let children: [AXUIElement]
     }
 
@@ -195,6 +307,8 @@ final class AccessibilityScanner: @unchecked Sendable {
             kAXPositionAttribute as CFString,
             kAXSizeAttribute as CFString,
             kAXVisibleChildrenAttribute as CFString,
+            kAXFocusedAttribute as CFString,
+            "AXEditable" as CFString,
         ]
         var rawValues: CFArray?
         let error = AXUIElementCopyMultipleAttributeValues(
@@ -216,12 +330,39 @@ final class AccessibilityScanner: @unchecked Sendable {
             description: values[3] as? String,
             placeholder: values[4] as? String,
             frame: frame(positionValue: values[5], sizeValue: values[6]),
+            isFocused: booleanValue(values[8]),
+            isEditable: booleanValue(values[9]),
             // Some accessibility providers do not implement AXVisibleChildren.
             // Fall back only when it is unsupported, not when it is a valid
             // empty array, so off-screen virtualized nodes stay out of the walk.
             children: visibleChildren
                 ?? elementArrayAttribute(element, kAXChildrenAttribute as CFString)
         )
+    }
+
+    private func elementHasNonEmptyTextValue(_ element: AXUIElement) -> Bool {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &value) == .success,
+              let value
+        else { return false }
+        if let string = value as? String { return !string.isEmpty }
+        if let attributedString = value as? NSAttributedString { return !attributedString.string.isEmpty }
+        return false
+    }
+
+    private func booleanValue(_ value: Any) -> Bool {
+        (value as? NSNumber)?.boolValue ?? false
+    }
+
+    private static func deduplicated(_ rects: [CGRect]) -> [CGRect] {
+        var result: [CGRect] = []
+        for rect in rects where !rect.isNull && !rect.isEmpty {
+            let integral = rect.integral
+            if !result.contains(where: { $0 == integral }) {
+                result.append(integral)
+            }
+        }
+        return result
     }
 
     private static func compactJSON(_ object: Any, maximumBytes: Int) -> String? {
@@ -245,6 +386,53 @@ final class AccessibilityScanner: @unchecked Sendable {
               CFGetTypeID(value) == AXUIElementGetTypeID()
         else { return nil }
         return (value as! AXUIElement)
+    }
+
+    private func requestScan() {
+        queue.async { [weak self] in
+            guard self?.isRunning == true else { return }
+            autoreleasepool { self?.scan() }
+        }
+    }
+
+    private func refreshFocusedApplicationObserver(for app: AXUIElement) {
+        var processID: pid_t = 0
+        guard AXUIElementGetPid(app, &processID) == .success, processID > 0 else { return }
+        guard processID != observedProcessID else { return }
+
+        removeFocusedApplicationObserver()
+        var observer: AXObserver?
+        guard AXObserverCreate(processID, Self.observerCallback, &observer) == .success,
+              let observer
+        else { return }
+
+        let refcon = Unmanaged.passUnretained(self).toOpaque()
+        for notification in [
+            kAXFocusedUIElementChangedNotification,
+            kAXFocusedWindowChangedNotification,
+            kAXWindowCreatedNotification,
+        ] {
+            _ = AXObserverAddNotification(observer, app, notification as CFString, refcon)
+        }
+        focusedApplicationObserver = observer
+        observedProcessID = processID
+        let source = AXObserverGetRunLoopSource(observer)
+        DispatchQueue.main.async {
+            CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        }
+    }
+
+    private func removeFocusedApplicationObserver() {
+        guard let observer = focusedApplicationObserver else {
+            observedProcessID = nil
+            return
+        }
+        focusedApplicationObserver = nil
+        observedProcessID = nil
+        let source = AXObserverGetRunLoopSource(observer)
+        DispatchQueue.main.async {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
+        }
     }
 
     private func elementArrayAttribute(_ element: AXUIElement, _ attribute: CFString) -> [AXUIElement] {

@@ -2,7 +2,7 @@ import { strict as assert } from 'node:assert'
 import { handleEdgeRequest } from '../functions/_shared/handler.ts'
 import { makeTestDependencies } from './test_dependencies.ts'
 
-Deno.test('join-session activates the session and restricts publishing to microphone', async () => {
+Deno.test('join-session activates the session and restricts publishing to microphone and camera', async () => {
   const activations: Array<[string, string]> = []
   const grants: Array<Record<string, unknown>> = []
   const deps = makeTestDependencies({
@@ -47,7 +47,7 @@ Deno.test('join-session activates the session and restricts publishing to microp
       room: '482913',
       canPublish: true,
       canSubscribe: true,
-      canPublishSources: ['microphone'],
+      canPublishSources: ['microphone', 'camera'],
     },
   ])
 })
@@ -76,6 +76,33 @@ Deno.test('join-session cannot reactivate an AI-frozen session', async () => {
   )
 
   assert.equal(response.status, 423)
+  assert.equal(activated, false)
+})
+
+Deno.test('join-session cannot add a second volunteer to an active session', async () => {
+  let activated = false
+  const deps = makeTestDependencies({
+    sessions: {
+      async findByCode(code) {
+        return { id: 'session-1', code, status: 'active' }
+      },
+      async activate() {
+        activated = true
+        return true
+      },
+    },
+  })
+
+  const response = await handleEdgeRequest(
+    'join-session',
+    new Request('http://localhost/join-session', {
+      method: 'POST',
+      body: JSON.stringify({ code: '482913', name: '小王' }),
+    }),
+    deps,
+  )
+
+  assert.equal(response.status, 409)
   assert.equal(activated, false)
 })
 

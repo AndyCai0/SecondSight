@@ -3,6 +3,7 @@ import { AnnotationSurface } from './AnnotationSurface'
 import {
   ApiError,
   createSecondSightApi,
+  type HelpBroadcast,
   type JoinedSession,
   type SecondSightApi,
 } from './api'
@@ -17,9 +18,11 @@ import './App.css'
 interface ActiveSession {
   joined: JoinedSession
   live: VolunteerSession
-  code: string
+  contextLabel: string
   volunteerName: string
 }
+
+type ReceiverStatus = 'connecting' | 'receiving' | 'reconnecting' | 'unavailable'
 
 interface AppProps {
   api?: SecondSightApi
@@ -32,22 +35,68 @@ function App({ api, connectSession = connectVolunteerSession }: AppProps) {
     supabaseUrl: environment.VITE_SUPABASE_URL ?? '',
     supabaseAnonKey: environment.VITE_SUPABASE_ANON_KEY ?? '',
   }), [api, environment.VITE_SUPABASE_ANON_KEY, environment.VITE_SUPABASE_URL])
+  const broadcastConfigured = Boolean(
+    api || (environment.VITE_SUPABASE_URL && environment.VITE_SUPABASE_ANON_KEY),
+  )
   const [code, setCode] = useState('')
   const [name, setName] = useState('')
   const [active, setActive] = useState<ActiveSession | null>(null)
   const [joining, setJoining] = useState(false)
   const [error, setError] = useState('')
   const [frozenReason, setFrozenReason] = useState<string | null>(null)
-  const [hasMedia, setHasMedia] = useState(false)
+  const [hasScreenShare, setHasScreenShare] = useState(false)
+  const [hasElderCamera, setHasElderCamera] = useState(false)
   const [auditFailed, setAuditFailed] = useState(false)
+  const [broadcasts, setBroadcasts] = useState<HelpBroadcast[]>([])
+  const [receiverStatus, setReceiverStatus] = useState<ReceiverStatus>(
+    broadcastConfigured ? 'connecting' : 'unavailable',
+  )
+  const [claimingSessionId, setClaimingSessionId] = useState<string | null>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
+  const elderCameraRef = useRef<HTMLVideoElement>(null)
   const audioRef = useRef<HTMLAudioElement>(null)
   const currentSession = useRef<VolunteerSession | null>(null)
   const manualDisconnect = useRef(false)
+  const nameRef = useRef(name)
+  const assistantId = useMemo(() => resolveAssistantId(), [])
 
   useEffect(() => {
-    if (active && videoRef.current && audioRef.current) {
-      active.live.attachMedia(videoRef.current, audioRef.current)
+    nameRef.current = name
+  }, [name])
+
+  useEffect(() => {
+    if (active) return
+    if (!broadcastConfigured) return
+
+    let cancelled = false
+    let timer: number | undefined
+    async function poll(): Promise<void> {
+      try {
+        const records = await configuredApi.pollBroadcasts({
+          assistantId,
+          name: nameRef.current.trim() || '待命助手',
+        })
+        if (cancelled) return
+        setBroadcasts(records)
+        setReceiverStatus('receiving')
+      } catch {
+        if (cancelled) return
+        setReceiverStatus('reconnecting')
+      } finally {
+        if (!cancelled) timer = window.setTimeout(() => void poll(), 100)
+      }
+    }
+
+    void poll()
+    return () => {
+      cancelled = true
+      if (timer !== undefined) window.clearTimeout(timer)
+    }
+  }, [active, assistantId, broadcastConfigured, configuredApi])
+
+  useEffect(() => {
+    if (active && videoRef.current && elderCameraRef.current && audioRef.current) {
+      active.live.attachMedia(videoRef.current, elderCameraRef.current, audioRef.current)
     }
   }, [active])
 
@@ -73,29 +122,67 @@ function App({ api, connectSession = connectVolunteerSession }: AppProps) {
     }
 
     setJoining(true)
-    setHasMedia(false)
+    setHasScreenShare(false)
+    setHasElderCamera(false)
     setAuditFailed(false)
     manualDisconnect.current = false
     try {
       const joined = await configuredApi.joinSession({ code, name: name.trim() })
-      const live = await connectSession(joined, {
-        onFreeze: (reason) => setFrozenReason(reason),
-        onResume: () => setFrozenReason(null),
-        onDisconnected: () => {
-          if (manualDisconnect.current) return
-          currentSession.current = null
-          setActive(null)
-          setError('连接已断开，请重新进入房间')
-        },
-        onMediaChanged: () => setHasMedia(true),
-      })
-      currentSession.current = live
-      setActive({ joined, live, code, volunteerName: name.trim() })
+      await activateSession(joined, `房间 ${code}`, name.trim())
     } catch (cause) {
       setError(joinFailureMessage(cause))
     } finally {
       setJoining(false)
     }
+  }
+
+  async function claimBroadcast(broadcast: HelpBroadcast): Promise<void> {
+    const volunteerName = name.trim()
+    setError('')
+    if (!volunteerName) {
+      setError('请先输入你的昵称，再响应求助')
+      return
+    }
+    if (claimingSessionId) return
+
+    setClaimingSessionId(broadcast.sessionId)
+    setHasScreenShare(false)
+    setHasElderCamera(false)
+    setAuditFailed(false)
+    manualDisconnect.current = false
+    try {
+      const joined = await configuredApi.claimBroadcast({
+        sessionId: broadcast.sessionId,
+        assistantId,
+        name: volunteerName,
+      })
+      await activateSession(joined, '在线求助已接通', volunteerName)
+    } catch (cause) {
+      setError(claimFailureMessage(cause))
+    } finally {
+      setClaimingSessionId(null)
+    }
+  }
+
+  async function activateSession(
+    joined: JoinedSession,
+    contextLabel: string,
+    volunteerName: string,
+  ): Promise<void> {
+    const live = await connectSession(joined, {
+      onFreeze: (reason) => setFrozenReason(reason),
+      onResume: () => setFrozenReason(null),
+      onDisconnected: () => {
+        if (manualDisconnect.current) return
+        currentSession.current = null
+        setActive(null)
+        setError('连接已断开，请重新进入房间')
+      },
+      onScreenShareChanged: setHasScreenShare,
+      onElderCameraChanged: setHasElderCamera,
+    })
+    currentSession.current = live
+    setActive({ joined, live, contextLabel, volunteerName })
   }
 
   async function leaveSession(): Promise<void> {
@@ -105,7 +192,8 @@ function App({ api, connectSession = connectVolunteerSession }: AppProps) {
     currentSession.current = null
     setActive(null)
     setFrozenReason(null)
-    setHasMedia(false)
+    setHasScreenShare(false)
+    setHasElderCamera(false)
   }
 
   function audit(message: VolunteerOutboundMessage): void {
@@ -153,7 +241,42 @@ function App({ api, connectSession = connectVolunteerSession }: AppProps) {
           <section className="join-card" aria-labelledby="join-title">
             <p className="card-step">志愿者入口</p>
             <h2 id="join-title">加入协助房间</h2>
-            <p className="card-description">房间码由长辈本人提供，有效期仅限本次协助。</p>
+            <p className="card-description">保持此页面打开，即可第一时间收到长辈的在线求助。</p>
+            <div className={`receiver-status receiver-status--${receiverStatus}`} role="status">
+              <i aria-hidden="true" />
+              <span>
+                <strong>{receiverStatusLabel(receiverStatus)}</strong>
+                <small>{receiverStatusDetail(receiverStatus)}</small>
+              </span>
+            </div>
+
+            {broadcasts.length > 0 && (
+              <section className="broadcast-list" aria-labelledby="broadcast-title">
+                <div className="broadcast-list__heading">
+                  <h3 id="broadcast-title">收到新的求助</h3>
+                  <span>{broadcasts.length} 条</span>
+                </div>
+                {broadcasts.map((broadcast) => (
+                  <article className="broadcast-card" key={broadcast.sessionId}>
+                    <div>
+                      <strong>{broadcast.elderLabel}正在等待帮助</strong>
+                      <time dateTime={broadcast.requestedAt}>
+                        {formatBroadcastTime(broadcast.requestedAt)}
+                      </time>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={claimingSessionId !== null}
+                      onClick={() => void claimBroadcast(broadcast)}
+                    >
+                      {claimingSessionId === broadcast.sessionId ? '正在响应…' : '响应求助'}
+                    </button>
+                  </article>
+                ))}
+              </section>
+            )}
+
+            <div className="join-divider"><span>或使用分享码</span></div>
             <form onSubmit={handleJoin}>
               <label htmlFor="room-code">6 位房间码</label>
               <input
@@ -178,14 +301,14 @@ function App({ api, connectSession = connectVolunteerSession }: AppProps) {
                 {joining ? '正在安全连接…' : '进入协助房间'}
               </button>
             </form>
-            <p className="microphone-note">进入后浏览器会请求麦克风权限，用于和长辈通话。</p>
+            <p className="microphone-note">进入后浏览器会请求摄像头和麦克风权限，用于和长辈视频通话。</p>
           </section>
         </main>
       ) : (
         <main className="session-layout">
           <section className="session-heading">
             <div>
-              <p className="eyebrow">房间 {active.code}</p>
+              <p className="eyebrow">{active.contextLabel}</p>
               <h1>正在协助</h1>
               <p>志愿者：{active.volunteerName}</p>
             </div>
@@ -207,7 +330,9 @@ function App({ api, connectSession = connectVolunteerSession }: AppProps) {
 
           <AnnotationSurface
             videoRef={videoRef}
-            hasMedia={hasMedia}
+            elderCameraRef={elderCameraRef}
+            hasScreenShare={hasScreenShare}
+            hasElderCamera={hasElderCamera}
             disabled={frozenReason !== null}
             send={(message) => active.live.send(message)}
             log={audit}
@@ -242,13 +367,62 @@ function joinFailureMessage(cause: unknown): string {
     if (cause.status === 404) return '没有找到这个房间，请和长辈核对房间码'
     if (cause.status === 410) return '这次协助已经结束，请让长辈重新发起'
     if (cause.status === 423) return '这次协助已被安全助手暂停，请等待长辈处理'
+    if (cause.status === 409) return '这次求助已经有志愿者接入'
     if (cause.status === 401 || cause.status === 403) return '连接凭证无效，请联系现场负责人'
     return cause.message
   }
   if (cause instanceof DOMException && cause.name === 'NotAllowedError') {
-    return '需要麦克风权限才能通话，请允许后重试'
+    return '需要摄像头和麦克风权限才能通话，请允许后重试'
   }
   return '暂时无法加入房间，请检查网络后重试'
+}
+
+function claimFailureMessage(cause: unknown): string {
+  if (cause instanceof ApiError && cause.status === 409) {
+    return '这条求助刚刚已被其他志愿者响应，请等待下一条广播'
+  }
+  return joinFailureMessage(cause)
+}
+
+function resolveAssistantId(): string {
+  const storageKey = 'secondsight-assistant-id'
+  try {
+    const stored = window.sessionStorage.getItem(storageKey)
+    if (stored) return stored
+    const created = crypto.randomUUID()
+    window.sessionStorage.setItem(storageKey, created)
+    return created
+  } catch {
+    return crypto.randomUUID()
+  }
+}
+
+function receiverStatusLabel(status: ReceiverStatus): string {
+  switch (status) {
+    case 'connecting': return '正在连接广播服务'
+    case 'receiving': return '正在接收广播'
+    case 'reconnecting': return '广播连接正在恢复'
+    case 'unavailable': return '广播服务尚未配置'
+  }
+}
+
+function receiverStatusDetail(status: ReceiverStatus): string {
+  switch (status) {
+    case 'connecting': return '正在登记你的在线状态…'
+    case 'receiving': return '页面会自动显示新的长辈求助'
+    case 'reconnecting': return '不会重复认领，网络恢复后自动继续'
+    case 'unavailable': return '仍可使用下方 6 位分享码加入'
+  }
+}
+
+function formatBroadcastTime(value: string): string {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '刚刚发出'
+  return `${new Intl.DateTimeFormat('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).format(date)} 发出`
 }
 
 export default App

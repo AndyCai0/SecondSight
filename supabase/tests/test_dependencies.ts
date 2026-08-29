@@ -4,10 +4,13 @@ type DependencyOverrides = {
   sessions?: Partial<EdgeDependencies['sessions']>
   events?: Partial<EdgeDependencies['events']>
   alerts?: Partial<EdgeDependencies['alerts']>
+  assistants?: Partial<EdgeDependencies['assistants']>
+  broadcasts?: Partial<EdgeDependencies['broadcasts']>
   tokens?: Partial<EdgeDependencies['tokens']>
   ai?: Partial<EdgeDependencies['ai']>
   publicLiveKitUrl?: string
   makeCode?: () => string
+  now?: () => Date
 }
 
 export function makeTestDependencies(overrides: DependencyOverrides = {}): EdgeDependencies {
@@ -42,6 +45,28 @@ export function makeTestDependencies(overrides: DependencyOverrides = {}): EdgeD
         return unexpected('alerts.list')
       },
     },
+    assistants: {
+      async touch() {
+        return unexpected('assistants.touch')
+      },
+      async countSince() {
+        return unexpected('assistants.countSince')
+      },
+    },
+    broadcasts: {
+      async setActive() {
+        return unexpected('broadcasts.setActive')
+      },
+      async listActive() {
+        return unexpected('broadcasts.listActive')
+      },
+      async findClaimable() {
+        return unexpected('broadcasts.findClaimable')
+      },
+      async claim() {
+        return unexpected('broadcasts.claim')
+      },
+    },
     tokens: {
       async sign() {
         return unexpected('tokens.sign')
@@ -57,6 +82,7 @@ export function makeTestDependencies(overrides: DependencyOverrides = {}): EdgeD
     },
     publicLiveKitUrl: 'wss://demo.livekit.cloud',
     makeCode: () => unexpected('makeCode'),
+    now: () => new Date('2026-08-29T10:00:00.000Z'),
   }
 
   return {
@@ -65,6 +91,8 @@ export function makeTestDependencies(overrides: DependencyOverrides = {}): EdgeD
     sessions: { ...defaults.sessions, ...overrides.sessions },
     events: { ...defaults.events, ...overrides.events },
     alerts: { ...defaults.alerts, ...overrides.alerts },
+    assistants: { ...defaults.assistants, ...overrides.assistants },
+    broadcasts: { ...defaults.broadcasts, ...overrides.broadcasts },
     tokens: { ...defaults.tokens, ...overrides.tokens },
     ai: { ...defaults.ai, ...overrides.ai },
   }

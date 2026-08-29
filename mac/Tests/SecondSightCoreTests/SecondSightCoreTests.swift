@@ -20,6 +20,14 @@ final class SessionStateTests: XCTestCase {
         XCTAssertThrowsError(try machine.apply(.resume))
         XCTAssertEqual(machine.phase, .idle)
     }
+
+    func testVolunteerDepartureCanEndWaitingOrFrozenSession() throws {
+        var waiting = SessionStateMachine(phase: .waiting)
+        XCTAssertEqual(try waiting.apply(.end), .ended)
+
+        var frozen = SessionStateMachine(phase: .frozen)
+        XCTAssertEqual(try frozen.apply(.end), .ended)
+    }
 }
 
 final class ContractTests: XCTestCase {
@@ -77,6 +85,59 @@ final class SecurityLogicTests: XCTestCase {
         let size = ImageSizing.fittedSize(width: 3_000, height: 2_000)
         XCTAssertEqual(size.width, 1_568)
         XCTAssertEqual(size.height, 1_045)
+    }
+
+    func testFocusedEditableFieldIsProtectedBeforeTyping() {
+        XCTAssertTrue(InputPrivacyPolicy.shouldRedactEditable(
+            role: "AXTextField",
+            subrole: "",
+            reportsEditable: false,
+            isFocused: true,
+            hasNonEmptyValue: false
+        ))
+    }
+
+    func testEnteredTextRemainsProtectedAfterFocusLeaves() {
+        XCTAssertTrue(InputPrivacyPolicy.shouldRedactEditable(
+            role: "AXTextArea",
+            subrole: "",
+            reportsEditable: false,
+            isFocused: false,
+            hasNonEmptyValue: true
+        ))
+        XCTAssertFalse(InputPrivacyPolicy.shouldRedactEditable(
+            role: "AXTextArea",
+            subrole: "",
+            reportsEditable: false,
+            isFocused: false,
+            hasNonEmptyValue: false
+        ))
+    }
+
+    func testBrowserReportedEditableContentIsProtected() {
+        XCTAssertTrue(InputPrivacyPolicy.shouldRedactEditable(
+            role: "AXGroup",
+            subrole: "",
+            reportsEditable: true,
+            isFocused: true,
+            hasNonEmptyValue: false
+        ))
+    }
+
+    func testNearbyAutofillSurfaceIsProtectedButMainWindowIsNot() {
+        let input = CGRect(x: 480, y: 420, width: 460, height: 60)
+        XCTAssertTrue(InputPrivacyPolicy.shouldRedactSuggestionSurface(
+            CGRect(x: 480, y: 480, width: 370, height: 150),
+            near: input
+        ))
+        XCTAssertFalse(InputPrivacyPolicy.shouldRedactSuggestionSurface(
+            CGRect(x: 0, y: 0, width: 1_920, height: 1_080),
+            near: input
+        ))
+        XCTAssertEqual(
+            InputPrivacyPolicy.fallbackSuggestionFrame(under: input),
+            CGRect(x: 480, y: 480, width: 520, height: 180)
+        )
     }
 }
 

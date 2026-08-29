@@ -28,11 +28,28 @@ export interface AlertRecord {
   reason: string
 }
 
+export interface HelpBroadcast {
+  sessionId: string
+  requestedAt: string
+  elderLabel: string
+}
+
+export interface AssistantPollInput {
+  assistantId: string
+  name: string
+}
+
+export interface ClaimBroadcastInput extends AssistantPollInput {
+  sessionId: string
+}
+
 export interface SecondSightApi {
   joinSession(input: JoinSessionInput): Promise<JoinedSession>
   createSession(): Promise<CreatedSession>
   logEvent(input: LogEventInput): Promise<void>
   listAlerts(sessionId: string): Promise<AlertRecord[]>
+  pollBroadcasts(input: AssistantPollInput): Promise<HelpBroadcast[]>
+  claimBroadcast(input: ClaimBroadcastInput): Promise<JoinedSession>
 }
 
 export class ApiError extends Error {
@@ -127,6 +144,48 @@ export function createSecondSightApi(options: ApiOptions): SecondSightApi {
       }
       return payload.alerts.map(parseAlert)
     },
+    async pollBroadcasts(input) {
+      const payload = await request('assistant-poll', {
+        assistant_id: input.assistantId,
+        name: input.name,
+      })
+      if (!isRecord(payload) || !Array.isArray(payload.broadcasts)) {
+        throw new ApiError('求助广播格式无效', 502)
+      }
+      return payload.broadcasts.map(parseHelpBroadcast)
+    },
+    async claimBroadcast(input) {
+      const payload = await request('claim-broadcast', {
+        session_id: input.sessionId,
+        assistant_id: input.assistantId,
+        name: input.name,
+      })
+      if (
+        !isRecord(payload) || typeof payload.session_id !== 'string' ||
+        typeof payload.lk_url !== 'string' || typeof payload.lk_token !== 'string'
+      ) {
+        throw new ApiError('服务返回了无法识别的数据', 502)
+      }
+      return {
+        sessionId: payload.session_id,
+        liveKitUrl: payload.lk_url,
+        liveKitToken: payload.lk_token,
+      }
+    },
+  }
+}
+
+function parseHelpBroadcast(value: unknown): HelpBroadcast {
+  if (
+    !isRecord(value) || typeof value.session_id !== 'string' ||
+    typeof value.requested_at !== 'string' || typeof value.elder_label !== 'string'
+  ) {
+    throw new ApiError('求助广播格式无效', 502)
+  }
+  return {
+    sessionId: value.session_id,
+    requestedAt: value.requested_at,
+    elderLabel: value.elder_label,
   }
 }
 

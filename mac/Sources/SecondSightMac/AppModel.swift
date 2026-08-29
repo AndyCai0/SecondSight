@@ -38,6 +38,7 @@ final class AppModel: ObservableObject {
     private let guideSpeech = PushToTalkSpeechService()
     private var screenCaptureFailed = false
     private var pendingDiscoveryMode: AssistanceDiscoveryMode?
+    private var isEndingSession = false
 
     init() {
         aiFeaturesEnabled = Self.defaultAIEnabled
@@ -266,11 +267,20 @@ final class AppModel: ObservableObject {
         transport.onVolunteerJoined = { [weak self] identity in
             Task { @MainActor in self?.volunteerJoined(identity: identity) }
         }
+        transport.onVolunteerLeft = { [weak self] identity in
+            Task { @MainActor in await self?.volunteerLeft(identity: identity) }
+        }
         transport.onDataMessage = { [weak self] message in
             Task { @MainActor in self?.handleDataMessage(message) }
         }
         if aiFeaturesEnabled {
             transport.onRemoteAudioTrack = { [weak referee] track in referee?.attach(to: track) }
+        }
+        transport.onRemoteCameraTrack = { [weak self] track in
+            Task { @MainActor in self?.overlay.model.showVolunteerCamera(track) }
+        }
+        transport.onRemoteCameraTrackRemoved = { [weak self] in
+            Task { @MainActor in self?.overlay.model.hideVolunteerCamera() }
         }
         transport.onMediaError = { [weak self] kind, error in
             Task { @MainActor in
@@ -328,6 +338,11 @@ final class AppModel: ObservableObject {
                 }
             }
         } catch { errorMessage = error.localizedDescription }
+    }
+
+    private func volunteerLeft(identity _: String) async {
+        guard phase == .waiting || phase == .connected || phase == .frozen else { return }
+        await endSessionNow(statusMessage: "帮助您的人已结束协助，本次求助已经结束")
     }
 
     private func handleDataMessage(_ message: DataMessage) {
@@ -423,7 +438,11 @@ final class AppModel: ObservableObject {
         await endSessionNow()
     }
 
-    private func endSessionNow() async {
+    private func endSessionNow(statusMessage finalStatusMessage: String = "本次求助已经结束") async {
+        guard !isEndingSession else { return }
+        isEndingSession = true
+        defer { isEndingSession = false }
+
         let broadcastSessionID = assistanceDiscoveryMode == .broadcast ? sessionID : nil
         referee.stop()
         await capture.stop()
@@ -441,7 +460,7 @@ final class AppModel: ObservableObject {
         broadcastMessage = nil
         mediaRecoveryMessage = nil
         screenCaptureFailed = false
-        statusMessage = "本次求助已经结束"
+        statusMessage = finalStatusMessage
 
         if let broadcastSessionID, let api {
             _ = try? await api.setSessionBroadcast(

@@ -1,8 +1,12 @@
 import { createClient } from 'npm:@supabase/supabase-js@2.112.4'
 import { AccessToken, TrackSource } from 'npm:livekit-server-sdk@2.18.0'
+import postgres from 'npm:postgres@3.4.3'
 import {
+  AIUnavailableError,
   type AlertRecord,
+  type BroadcastRecord,
   type EdgeDependencies,
+  ServerOperationError,
   SessionCodeConflictError,
   type SessionRecord,
 } from './handler.ts'
@@ -10,10 +14,11 @@ import {
 export interface ProductionConfig {
   supabaseUrl: string
   supabaseServiceKey: string
+  supabaseDbUrl?: string
   liveKitApiKey: string
   liveKitApiSecret: string
   liveKitUrl: string
-  anthropicApiKey: string
+  anthropicApiKey?: string
 }
 
 type EnvironmentReader = (name: string) => string | undefined
@@ -28,13 +33,20 @@ const ALERT_PAGE_SIZE = 1_000
 export function readProductionConfig(
   readEnvironment: EnvironmentReader = Deno.env.get,
 ): ProductionConfig {
-  return {
-    supabaseUrl: requiredEnvironment(readEnvironment, 'SUPABASE_URL'),
-    supabaseServiceKey: readSupabaseServiceKey(readEnvironment),
-    liveKitApiKey: requiredEnvironment(readEnvironment, 'LIVEKIT_API_KEY'),
-    liveKitApiSecret: requiredEnvironment(readEnvironment, 'LIVEKIT_API_SECRET'),
-    liveKitUrl: requiredEnvironment(readEnvironment, 'LIVEKIT_URL'),
-    anthropicApiKey: requiredEnvironment(readEnvironment, 'ANTHROPIC_API_KEY'),
+  try {
+    return {
+      supabaseUrl: requiredEnvironment(readEnvironment, 'SUPABASE_URL'),
+      supabaseServiceKey: readSupabaseServiceKey(readEnvironment),
+      supabaseDbUrl: optionalEnvironment(readEnvironment, 'SUPABASE_DB_URL'),
+      liveKitApiKey: requiredEnvironment(readEnvironment, 'LIVEKIT_API_KEY'),
+      liveKitApiSecret: requiredEnvironment(readEnvironment, 'LIVEKIT_API_SECRET'),
+      liveKitUrl: requiredEnvironment(readEnvironment, 'LIVEKIT_URL'),
+      anthropicApiKey: optionalEnvironment(readEnvironment, 'AI_ENABLED') === 'true'
+        ? optionalEnvironment(readEnvironment, 'ANTHROPIC_API_KEY')
+        : undefined,
+    }
+  } catch {
+    throw new ServerOperationError('SERVER_CONFIGURATION_ERROR')
   }
 }
 
@@ -48,71 +60,185 @@ export function createProductionDependencies(
       detectSessionInUrl: false,
       persistSession: false,
     },
+    global: {
+      fetch: createSupabaseServiceFetcher(config.supabaseServiceKey, fetcher),
+    },
   })
-  const ai = createAnthropicClient(config.anthropicApiKey, fetcher)
+  const sql = config.supabaseDbUrl
+    ? postgres(config.supabaseDbUrl, { prepare: false, max: 1 })
+    : undefined
+  const ai = config.anthropicApiKey
+    ? createAnthropicClient(config.anthropicApiKey, fetcher)
+    : createUnavailableAIClient()
 
   return {
     sessions: {
       async create(code) {
+        if (sql) {
+          try {
+            const rows = await sql<SessionRecord[]>`
+              insert into public.sessions (code, status)
+              values (${code}, 'waiting')
+              returning id::text, code, status
+            `
+            if (!rows[0]) throw new ServerOperationError('SERVER_DATABASE_ERROR')
+            return rows[0]
+          } catch (error) {
+            if (isRecord(error) && error.code === '23505') {
+              throw new SessionCodeConflictError()
+            }
+            if (error instanceof ServerOperationError) throw error
+            throw databaseOperationError(error)
+          }
+        }
         const { data, error } = await database
           .from('sessions')
           .insert({ code, status: 'waiting' })
           .select('id, code, status')
           .single()
         if (error?.code === '23505') throw new SessionCodeConflictError()
-        if (error || !data) throw new Error('Unable to create session')
+        if (error || !data) throw databaseOperationError(error)
         return data as SessionRecord
       },
       async findByCode(code) {
+        if (sql) {
+          try {
+            const rows = await sql<SessionRecord[]>`
+              select id::text, code, status
+              from public.sessions
+              where code = ${code}
+              limit 1
+            `
+            return rows[0] ?? null
+          } catch (error) {
+            throw databaseOperationError(error)
+          }
+        }
         const { data, error } = await database
           .from('sessions')
           .select('id, code, status')
           .eq('code', code)
           .maybeSingle()
-        if (error) throw new Error('Unable to find session')
+        if (error) throw databaseOperationError(error)
         return data as SessionRecord | null
       },
       async activate(sessionId, volunteerName) {
+        if (sql) {
+          try {
+            const rows = await sql<{ id: string }[]>`
+              update public.sessions
+              set status = 'active', volunteer_label = ${volunteerName}
+              where id = ${sessionId}
+                and status = 'waiting'
+              returning id::text
+            `
+            return rows.length > 0
+          } catch (error) {
+            throw databaseOperationError(error)
+          }
+        }
         const { data, error } = await database
           .from('sessions')
           .update({ status: 'active', volunteer_label: volunteerName })
           .eq('id', sessionId)
-          .in('status', ['waiting', 'active'])
+          .eq('status', 'waiting')
           .select('id')
           .maybeSingle()
-        if (error) throw new Error('Unable to activate session')
+        if (error) throw databaseOperationError(error)
         return data !== null
       },
       async freeze(sessionId) {
+        if (sql) {
+          try {
+            await sql`
+              update public.sessions
+              set status = 'frozen'
+              where id = ${sessionId}
+            `
+            return
+          } catch (error) {
+            throw databaseOperationError(error)
+          }
+        }
         const { error } = await database
           .from('sessions')
           .update({ status: 'frozen' })
           .eq('id', sessionId)
-        if (error) throw new Error('Unable to freeze session')
+        if (error) throw databaseOperationError(error)
       },
     },
     events: {
       async insert(input) {
+        if (sql) {
+          try {
+            await sql`
+              insert into public.session_events (session_id, actor, kind, payload)
+              values (
+                ${input.sessionId},
+                ${input.actor},
+                ${input.kind},
+                ${sql.json(input.payload as postgres.JSONValue)}
+              )
+            `
+            return
+          } catch (error) {
+            throw databaseOperationError(error)
+          }
+        }
         const { error } = await database.from('session_events').insert({
           session_id: input.sessionId,
           actor: input.actor,
           kind: input.kind,
           payload: input.payload,
         })
-        if (error) throw new Error('Unable to record event')
+        if (error) throw databaseOperationError(error)
       },
     },
     alerts: {
       async insert(input) {
+        if (sql) {
+          try {
+            await sql`
+              insert into public.alerts (session_id, severity, transcript, reason)
+              values (
+                ${input.sessionId},
+                ${input.severity},
+                ${input.transcript},
+                ${input.reason}
+              )
+            `
+            return
+          } catch (error) {
+            throw databaseOperationError(error)
+          }
+        }
         const { error } = await database.from('alerts').insert({
           session_id: input.sessionId,
           severity: input.severity,
           transcript: input.transcript,
           reason: input.reason,
         })
-        if (error) throw new Error('Unable to record alert')
+        if (error) throw databaseOperationError(error)
       },
       async list(sessionId) {
+        if (sql) {
+          try {
+            const rows = await sql<
+              Array<Omit<AlertRecord, 'ts'> & { ts: Date | string }>
+            >`
+              select id::float8 as id, ts, severity, transcript, reason
+              from public.alerts
+              where session_id = ${sessionId}
+              order by ts desc, id desc
+            `
+            return rows.map((row) => ({
+              ...row,
+              ts: row.ts instanceof Date ? row.ts.toISOString() : String(row.ts),
+            }))
+          } catch (error) {
+            throw databaseOperationError(error)
+          }
+        }
         return await collectAllAlerts(async (from, to) => {
           const { data, error } = await database
             .from('alerts')
@@ -125,29 +251,238 @@ export function createProductionDependencies(
         })
       },
     },
+    assistants: {
+      async touch(input) {
+        if (sql) {
+          try {
+            await sql`
+              insert into public.assistant_presence (id, display_name, last_seen_at)
+              values (${input.id}, ${input.displayName}, ${input.seenAt})
+              on conflict (id) do update
+              set display_name = excluded.display_name,
+                  last_seen_at = excluded.last_seen_at
+            `
+            return
+          } catch (error) {
+            throw databaseOperationError(error)
+          }
+        }
+        const { error } = await database.from('assistant_presence').upsert({
+          id: input.id,
+          display_name: input.displayName,
+          last_seen_at: input.seenAt,
+        })
+        if (error) throw databaseOperationError(error)
+      },
+      async countSince(cutoff) {
+        if (sql) {
+          try {
+            const rows = await sql<{ count: number }[]>`
+              select count(*)::int as count
+              from public.assistant_presence
+              where last_seen_at >= ${cutoff}
+            `
+            return rows[0]?.count ?? 0
+          } catch (error) {
+            throw databaseOperationError(error)
+          }
+        }
+        const { count, error } = await database
+          .from('assistant_presence')
+          .select('id', { count: 'exact', head: true })
+          .gte('last_seen_at', cutoff)
+        if (error) throw databaseOperationError(error)
+        return count ?? 0
+      },
+    },
+    broadcasts: {
+      async setActive(sessionId, isActive, startedAt) {
+        if (sql) {
+          try {
+            const rows = isActive
+              ? await sql<{ id: string }[]>`
+                update public.sessions
+                set broadcast_active = true, broadcast_started_at = ${startedAt}
+                where id = ${sessionId} and status = 'waiting'
+                returning id::text
+              `
+              : await sql<{ id: string }[]>`
+                update public.sessions
+                set broadcast_active = false, broadcast_started_at = null
+                where id = ${sessionId}
+                returning id::text
+              `
+            return rows.length > 0
+          } catch (error) {
+            throw databaseOperationError(error)
+          }
+        }
+        let query = database
+          .from('sessions')
+          .update({
+            broadcast_active: isActive,
+            broadcast_started_at: isActive ? startedAt : null,
+          })
+          .eq('id', sessionId)
+        if (isActive) query = query.eq('status', 'waiting')
+        const { data, error } = await query.select('id').maybeSingle()
+        if (error) throw databaseOperationError(error)
+        return data !== null
+      },
+      async listActive(cutoff) {
+        if (sql) {
+          try {
+            const rows = await sql<
+              Array<{
+                session_id: string
+                requested_at: Date | string
+                elder_label: string | null
+              }>
+            >`
+              select
+                id::text as session_id,
+                broadcast_started_at as requested_at,
+                elder_label
+              from public.sessions
+              where status = 'waiting'
+                and broadcast_active = true
+                and broadcast_started_at >= ${cutoff}
+              order by broadcast_started_at
+              limit 20
+            `
+            return rows.map(mapBroadcastRecord)
+          } catch (error) {
+            throw databaseOperationError(error)
+          }
+        }
+        const { data, error } = await database
+          .from('sessions')
+          .select('id, broadcast_started_at, elder_label')
+          .eq('status', 'waiting')
+          .eq('broadcast_active', true)
+          .gte('broadcast_started_at', cutoff)
+          .order('broadcast_started_at', { ascending: true })
+          .limit(20)
+        if (error) throw databaseOperationError(error)
+        return (data ?? []).map((row) =>
+          mapBroadcastRecord({
+            session_id: String(row.id),
+            requested_at: String(row.broadcast_started_at),
+            elder_label: typeof row.elder_label === 'string' ? row.elder_label : null,
+          })
+        )
+      },
+      async findClaimable(sessionId, cutoff) {
+        if (sql) {
+          try {
+            const rows = await sql<SessionRecord[]>`
+              select id::text, code, status
+              from public.sessions
+              where id = ${sessionId}
+                and status = 'waiting'
+                and broadcast_active = true
+                and broadcast_started_at >= ${cutoff}
+              limit 1
+            `
+            return rows[0] ?? null
+          } catch (error) {
+            throw databaseOperationError(error)
+          }
+        }
+        const { data, error } = await database
+          .from('sessions')
+          .select('id, code, status')
+          .eq('id', sessionId)
+          .eq('status', 'waiting')
+          .eq('broadcast_active', true)
+          .gte('broadcast_started_at', cutoff)
+          .maybeSingle()
+        if (error) throw databaseOperationError(error)
+        return data as SessionRecord | null
+      },
+      async claim(sessionId, volunteerName, cutoff) {
+        if (sql) {
+          try {
+            const rows = await sql<{ id: string }[]>`
+              update public.sessions
+              set status = 'active',
+                  volunteer_label = ${volunteerName},
+                  broadcast_active = false,
+                  broadcast_started_at = null
+              where id = ${sessionId}
+                and status = 'waiting'
+                and broadcast_active = true
+                and broadcast_started_at >= ${cutoff}
+              returning id::text
+            `
+            return rows.length > 0
+          } catch (error) {
+            throw databaseOperationError(error)
+          }
+        }
+        const { data, error } = await database
+          .from('sessions')
+          .update({
+            status: 'active',
+            volunteer_label: volunteerName,
+            broadcast_active: false,
+            broadcast_started_at: null,
+          })
+          .eq('id', sessionId)
+          .eq('status', 'waiting')
+          .eq('broadcast_active', true)
+          .gte('broadcast_started_at', cutoff)
+          .select('id')
+          .maybeSingle()
+        if (error) throw databaseOperationError(error)
+        return data !== null
+      },
+    },
     tokens: {
       async sign(grant) {
-        const token = new AccessToken(config.liveKitApiKey, config.liveKitApiSecret, {
-          identity: grant.identity,
-          ttl: '2h',
-        })
-        token.addGrant({
-          roomJoin: true,
-          room: grant.room,
-          canPublish: grant.canPublish,
-          canSubscribe: grant.canSubscribe,
-          canPublishSources: grant.canPublishSources?.map((source) => {
-            if (source !== 'microphone') throw new Error('Unsupported publish source')
-            return TrackSource.MICROPHONE
-          }),
-        })
-        return await token.toJwt()
+        try {
+          const token = new AccessToken(config.liveKitApiKey, config.liveKitApiSecret, {
+            identity: grant.identity,
+            ttl: '2h',
+          })
+          token.addGrant({
+            roomJoin: true,
+            room: grant.room,
+            canPublish: grant.canPublish,
+            canSubscribe: grant.canSubscribe,
+            canPublishSources: grant.canPublishSources?.map((source) => {
+              switch (source) {
+                case 'microphone': return TrackSource.MICROPHONE
+                case 'camera': return TrackSource.CAMERA
+              }
+            }),
+          })
+          return await token.toJwt()
+        } catch {
+          throw new ServerOperationError('SERVER_TOKEN_SIGNING_ERROR')
+        }
       },
     },
     ai,
     publicLiveKitUrl: config.liveKitUrl,
     makeCode: randomSixDigitCode,
+    now: () => new Date(),
   }
+}
+
+export function createSupabaseServiceFetcher(
+  serviceKey: string,
+  fetcher: Fetcher = fetch,
+): Fetcher {
+  if (!serviceKey.startsWith('sb_secret_')) return fetcher
+
+  return ((input, init) => {
+    const headers = new Headers(
+      init?.headers ?? (input instanceof Request ? input.headers : undefined),
+    )
+    headers.delete('authorization')
+    return fetcher(input, { ...init, headers })
+  }) as Fetcher
 }
 
 export async function collectAllAlerts(loadPage: AlertPageLoader): Promise<AlertRecord[]> {
@@ -229,6 +564,20 @@ export function createAnthropicClient(apiKey: string, fetcher: Fetcher = fetch) 
   }
 }
 
+function createUnavailableAIClient(): EdgeDependencies['ai'] {
+  const unavailable = (): never => {
+    throw new AIUnavailableError()
+  }
+  return {
+    async guide() {
+      return unavailable()
+    },
+    async referee() {
+      return unavailable()
+    },
+  }
+}
+
 function parseGuideResponse(value: unknown) {
   const parsed = parseClaudeJson(value)
   const instructionText = stringValue(parsed, 'instruction_text').trim()
@@ -298,7 +647,26 @@ function requiredEnvironment(
   throw new Error(`Missing required environment variable: ${names.join(' or ')}`)
 }
 
+function optionalEnvironment(
+  readEnvironment: EnvironmentReader,
+  name: string,
+): string | undefined {
+  return readEnvironment(name)?.trim() || undefined
+}
+
+function databaseOperationError(error: unknown): ServerOperationError {
+  const rawCode = isRecord(error) && typeof error.code === 'string' ? error.code : undefined
+  const providerCode = rawCode && /^[A-Z0-9_]{1,32}$/i.test(rawCode) ? rawCode : undefined
+  return new ServerOperationError('SERVER_DATABASE_ERROR', providerCode)
+}
+
 function readSupabaseServiceKey(readEnvironment: EnvironmentReader): string {
+  const legacyServiceRoleKey = optionalEnvironment(
+    readEnvironment,
+    'SUPABASE_SERVICE_ROLE_KEY',
+  )
+  if (legacyServiceRoleKey) return legacyServiceRoleKey
+
   const secretKeysJson = readEnvironment('SUPABASE_SECRET_KEYS')
   if (secretKeysJson) {
     try {
@@ -313,7 +681,6 @@ function readSupabaseServiceKey(readEnvironment: EnvironmentReader): string {
   return requiredEnvironment(
     readEnvironment,
     'SUPABASE_SECRET_KEY',
-    'SUPABASE_SERVICE_ROLE_KEY',
   )
 }
 
@@ -327,4 +694,18 @@ function normalizedNumber(value: unknown): value is number {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function mapBroadcastRecord(row: {
+  session_id: string
+  requested_at: Date | string
+  elder_label: string | null
+}): BroadcastRecord {
+  return {
+    sessionId: row.session_id,
+    requestedAt: row.requested_at instanceof Date
+      ? row.requested_at.toISOString()
+      : String(row.requested_at),
+    elderLabel: row.elder_label?.trim() || '长辈',
+  }
 }

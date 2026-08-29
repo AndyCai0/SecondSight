@@ -3,7 +3,8 @@
   "specifiers": {
     "npm:@supabase/supabase-js@2.112.4": "2.112.4",
     "npm:deno@2.9.6": "2.9.6",
-    "npm:livekit-server-sdk@2.18.0": "2.18.0"
+    "npm:livekit-server-sdk@2.18.0": "2.18.0",
+    "npm:postgres@3.4.3": "3.4.3"
   },
   "npm": {
     "@bufbuild/protobuf@1.10.1": {
@@ -116,6 +117,9 @@
         "@livekit/protocol",
         "jose"
       ]
+    },
+    "postgres@3.4.3": {
+      "integrity": "sha512-iHJn4+M9vbTdHSdDzNkC0crHq+1CUdFhx+YqCE+SqWxPjm+Zu63jq7yZborOBF64c8pc58O5uMudyL1FQcHacA=="
     },
     "tslib@2.8.1": {
       "integrity": "sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w=="

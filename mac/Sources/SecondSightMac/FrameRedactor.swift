@@ -15,7 +15,7 @@ final class FrameRedactor: @unchecked Sendable {
         let sourceImage = CIImage(cvPixelBuffer: source)
         context.render(sourceImage, to: output, bounds: sourceImage.extent, colorSpace: CGColorSpaceCreateDeviceRGB())
 
-        if snapshot.secureInputEnabled && snapshot.axRects.isEmpty {
+        if snapshot.protectionUnavailable || (snapshot.secureInputEnabled && snapshot.axRects.isEmpty) {
             drawSecurePlaceholder(in: output)
             return output
         }

@@ -3,27 +3,107 @@ import {
   collectAllAlerts,
   createAnthropicClient,
   createProductionDependencies,
+  createSupabaseServiceFetcher,
   readProductionConfig,
 } from '../functions/_shared/dependencies.ts'
+import { ServerOperationError } from '../functions/_shared/handler.ts'
 
-Deno.test('production config reads the current hosted Supabase secret-key map', () => {
+Deno.test('production config reads LiveKit settings without requiring AI configuration', () => {
   const values: Record<string, string> = {
     SUPABASE_URL: 'https://project.supabase.co',
     SUPABASE_SECRET_KEYS: JSON.stringify({ default: 'sb_secret_example' }),
     LIVEKIT_API_KEY: 'lk-key',
     LIVEKIT_API_SECRET: 'lk-secret',
     LIVEKIT_URL: 'wss://project.livekit.cloud',
-    ANTHROPIC_API_KEY: 'anthropic-key',
   }
 
   assert.deepEqual(readProductionConfig((name) => values[name]), {
     supabaseUrl: values.SUPABASE_URL,
     supabaseServiceKey: 'sb_secret_example',
+    supabaseDbUrl: undefined,
     liveKitApiKey: values.LIVEKIT_API_KEY,
     liveKitApiSecret: values.LIVEKIT_API_SECRET,
     liveKitUrl: values.LIVEKIT_URL,
-    anthropicApiKey: values.ANTHROPIC_API_KEY,
+    anthropicApiKey: undefined,
   })
+})
+
+Deno.test('hosted config prefers the service-role JWT for supabase-js RLS bypass', () => {
+  const values: Record<string, string> = {
+    SUPABASE_URL: 'https://project.supabase.co',
+    SUPABASE_SERVICE_ROLE_KEY: 'legacy-service-role-jwt',
+    SUPABASE_SECRET_KEYS: JSON.stringify({ default: 'sb_secret_example' }),
+    LIVEKIT_API_KEY: 'lk-key',
+    LIVEKIT_API_SECRET: 'lk-secret',
+    LIVEKIT_URL: 'wss://project.livekit.cloud',
+  }
+
+  assert.equal(
+    readProductionConfig((name) => values[name]).supabaseServiceKey,
+    values.SUPABASE_SERVICE_ROLE_KEY,
+  )
+})
+
+Deno.test('production config does not expose missing secret names', () => {
+  assert.throws(
+    () => readProductionConfig(() => undefined),
+    (error) =>
+      error instanceof ServerOperationError &&
+      error.code === 'SERVER_CONFIGURATION_ERROR' &&
+      !error.message.includes('LIVEKIT'),
+  )
+})
+
+Deno.test('AI key is ignored unless the feature is explicitly enabled', () => {
+  const values: Record<string, string> = {
+    SUPABASE_URL: 'https://project.supabase.co',
+    SUPABASE_SECRET_KEYS: JSON.stringify({ default: 'sb_secret_example' }),
+    LIVEKIT_API_KEY: 'lk-key',
+    LIVEKIT_API_SECRET: 'lk-secret',
+    LIVEKIT_URL: 'wss://project.livekit.cloud',
+    ANTHROPIC_API_KEY: 'must-not-be-used',
+  }
+
+  assert.equal(readProductionConfig((name) => values[name]).anthropicApiKey, undefined)
+  values.AI_ENABLED = 'true'
+  assert.equal(
+    readProductionConfig((name) => values[name]).anthropicApiKey,
+    values.ANTHROPIC_API_KEY,
+  )
+})
+
+Deno.test('opaque Supabase secret keys are sent only in apikey, not Authorization', async () => {
+  const observedHeaders: Headers[] = []
+  const serviceKey = 'sb_secret_server_only'
+  const fetcher = createSupabaseServiceFetcher(serviceKey, async (_input, init) => {
+    observedHeaders.push(new Headers(init?.headers))
+    return Response.json({ ok: true })
+  })
+
+  await fetcher('https://project.supabase.co/rest/v1/sessions', {
+    headers: {
+      apikey: serviceKey,
+      authorization: `Bearer ${serviceKey}`,
+    },
+  })
+
+  assert.equal(observedHeaders[0].get('apikey'), serviceKey)
+  assert.equal(observedHeaders[0].get('authorization'), null)
+})
+
+Deno.test('legacy service-role JWT keeps its Authorization header', async () => {
+  const observedHeaders: Headers[] = []
+  const legacyKey = 'legacy-service-role-jwt'
+  const fetcher = createSupabaseServiceFetcher(legacyKey, async (_input, init) => {
+    observedHeaders.push(new Headers(init?.headers))
+    return Response.json({ ok: true })
+  })
+
+  await fetcher('https://project.supabase.co/rest/v1/sessions', {
+    headers: { authorization: `Bearer ${legacyKey}` },
+  })
+
+  assert.equal(observedHeaders[0].get('authorization'), `Bearer ${legacyKey}`)
 })
 
 Deno.test('Anthropic adapter uses the contract models and validates JSON output', async () => {
@@ -61,14 +141,13 @@ Deno.test('Anthropic adapter uses the contract models and validates JSON output'
   assert.deepEqual(referee, { verdict: 'freeze', reason: '索要短信验证码' })
 })
 
-Deno.test('production LiveKit token contains a microphone-only volunteer grant', async () => {
+Deno.test('production LiveKit token lets volunteers publish only microphone and camera', async () => {
   const dependencies = createProductionDependencies({
     supabaseUrl: 'https://project.supabase.co',
     supabaseServiceKey: 'server-key-used-only-by-the-test',
     liveKitApiKey: 'api-key',
     liveKitApiSecret: 'a-secret-long-enough-for-hmac-signing-1234567890',
     liveKitUrl: 'wss://project.livekit.cloud',
-    anthropicApiKey: 'test-key',
   })
 
   const token = await dependencies.tokens.sign({
@@ -76,13 +155,35 @@ Deno.test('production LiveKit token contains a microphone-only volunteer grant',
     room: '482913',
     canPublish: true,
     canSubscribe: true,
-    canPublishSources: ['microphone'],
+    canPublishSources: ['microphone', 'camera'],
   })
   const payload = JSON.parse(decodeBase64Url(token.split('.')[1]))
 
   assert.equal(payload.sub, 'volunteer:小王')
   assert.equal(payload.video.room, '482913')
-  assert.deepEqual(payload.video.canPublishSources, ['microphone'])
+  assert.deepEqual(payload.video.canPublishSources, ['microphone', 'camera'])
+})
+
+Deno.test('AI calls are unavailable without blocking non-AI dependencies', async () => {
+  const dependencies = createProductionDependencies({
+    supabaseUrl: 'https://project.supabase.co',
+    supabaseServiceKey: 'server-key-used-only-by-the-test',
+    liveKitApiKey: 'api-key',
+    liveKitApiSecret: 'a-secret-long-enough-for-hmac-signing-1234567890',
+    liveKitUrl: 'wss://project.livekit.cloud',
+  })
+
+  const token = await dependencies.tokens.sign({
+    identity: 'elder',
+    room: '482913',
+    canPublish: true,
+    canSubscribe: true,
+  })
+  assert.equal(token.split('.').length, 3)
+  await assert.rejects(
+    () => dependencies.ai.referee('测试文本'),
+    { name: 'AIUnavailableError', message: 'AI features are not enabled' },
+  )
 })
 
 Deno.test('alert history pagination returns every record without a silent cap', async () => {

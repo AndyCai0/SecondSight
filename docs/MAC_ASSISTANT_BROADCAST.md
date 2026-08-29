@@ -22,6 +22,10 @@ Mac 端不会因为广播功能暂不可用而中断已创建的安全会话。�
 
 ## 伙伴端需要实现的接口
 
+> 2026-08-29：以下伙伴端链路已经在本仓库实现。Web 标签页打开且未进入会话时，
+> 会串行调用 `assistant-poll`；每次响应完成后等待 100ms 再发下一次，因此不会堆积
+> 并发请求。页面明确显示“正在接收广播”。
+
 ### `POST broadcast-session`
 
 请求开启广播：
@@ -63,6 +67,42 @@ Mac 端不会因为广播功能暂不可用而中断已创建的安全会话。�
 
 接口继续使用与其他 Edge Function 相同的 Supabase anon Bearer header。非 2xx、无法解码或 `ok=false` 都会被 Mac 视为广播未生效，并安全降级到分享码。
 
+### `POST assistant-poll`
+
+```json
+{"assistant_id":"5f028bd8-9602-40ed-8c39-e35c6bca1a21","name":"小王"}
+```
+
+`assistant_id` 是当前浏览器标签页在 `sessionStorage` 中生成的 UUID。服务端同时刷新
+`last_seen_at` 并返回仍处于 `waiting`、未撤回且未超过 15 分钟 TTL 的广播：
+
+```json
+{
+  "broadcasts": [{
+    "session_id": "9d1d5434-6da5-41e0-af70-c5aa35c6816f",
+    "requested_at": "2026-08-29T10:00:00.000Z",
+    "elder_label": "长辈"
+  }]
+}
+```
+
+响应不包含房间码或 LiveKit token。`broadcast-session` 统计 3 秒内刷新过的标签页为
+在线助手。
+
+### `POST claim-broadcast`
+
+```json
+{
+  "session_id": "9d1d5434-6da5-41e0-af70-c5aa35c6816f",
+  "assistant_id": "5f028bd8-9602-40ed-8c39-e35c6bca1a21",
+  "name": "小王"
+}
+```
+
+认领成功后返回与 `join-session` 相同的 `{session_id, lk_url, lk_token}`；并发输家返回
+HTTP 409，且不会收到已签发给赢家的 token。认领成功会在同一个条件更新中把会话改为
+`active` 并撤下广播。
+
 ## 网页端认领规则
 
 - 广播列表只展示仍处于 `waiting` 且广播有效的会话。
@@ -83,3 +123,9 @@ Mac 端不会因为广播功能暂不可用而中断已创建的安全会话。�
 3. Mac 自动进入 `connected`，广播从所有助手列表消失。
 4. Mac 主动结束时广播被撤回。
 5. 广播接口离线时 Mac 明确降级到分享码，原有会话仍可加入。
+
+## 后续扩展
+
+100ms HTTP 轮询严格实现了当前 demo 的交互要求，但每个空闲标签页理论上最多产生
+每秒 10 次 Edge Function 调用。正式扩容前应改为 Supabase Realtime Broadcast +
+Presence 的 WebSocket 长连接；页面状态和 `claim-broadcast` 原子认领接口可以保持不变。

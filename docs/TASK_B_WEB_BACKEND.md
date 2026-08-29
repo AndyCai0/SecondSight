@@ -9,7 +9,8 @@
 
 1. LiveKit Cloud 免费项目 → 记下 `LIVEKIT_URL`、API key/secret。
 2. Supabase 项目 → 记下 URL、anon key。
-3. `supabase secrets set LIVEKIT_API_KEY=... LIVEKIT_API_SECRET=... LIVEKIT_URL=... ANTHROPIC_API_KEY=...`
+3. `supabase secrets set LIVEKIT_API_KEY=... LIVEKIT_API_SECRET=... LIVEKIT_URL=...`
+   `ANTHROPIC_API_KEY` 仅在启用 `ai-guide` / `ai-referee` 时单独配置。
 4. 把三个公开值填进 `docs/CONTRACT.md` §6，commit + push，通知 A。
 5. 给 A 开 LiveKit 控制台访问（A 需要手签测试 token）。
 
@@ -28,8 +29,8 @@
    canPublish+canSubscribe）→ 按契约返回。
 2. **join-session**:按 code 查 sessions，不存在→404，status=ended→410;
    更新 volunteer_label、status=active;签 token（identity=`volunteer:{name}`，
-   `canPublishSources: ["microphone"]` —— 这是"只看不控"的 token 层防线，
-   必须验证生效）→ 按契约返回。
+   `canPublishSources: ["microphone", "camera"]` —— 支持双向视频，但仍在 token
+   层禁止志愿者发布屏幕，必须验证生效）→ 按契约返回。
 3. **ai-guide**:调 Claude API，model `claude-sonnet-5`，vision。
    system prompt 要点:你在指导不熟悉电脑的中国老人;一次只给一步;
    `instruction_text` 必须是口语化中文短句;若提供 ax_summary 优先用其坐标;

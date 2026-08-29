@@ -18,9 +18,9 @@
 
 - **room name** = 6 位数字房间码（字符串，如 `"482913"`）。
 - **identity**:老人端 = `elder`;志愿者 = `volunteer:{name}`。
-- 老人端发布:屏幕视频轨（已打码）+ 麦克风音频轨。
-- 志愿者端发布:**仅麦克风**（join-session 签发的 token 在 `canPublishSources`
-  层面限制为 microphone，B 负责保证）。
+- 老人端发布:屏幕视频轨（已打码）+ 摄像头视频轨 + 麦克风音频轨。
+- 志愿者端发布:摄像头视频轨 + 麦克风音频轨（join-session 签发的 token 在
+  `canPublishSources` 层面仅允许 camera 和 microphone，仍禁止屏幕共享）。
 - LiveKit Cloud 项目由 **B 创建**，`LIVEKIT_URL` 写进本文件 §6 后通知 A。
 
 ## 3. DataChannel 消息协议（v1，冻结）
@@ -60,7 +60,7 @@ Base URL:`{SUPABASE_URL}/functions/v1/`，Header:`Authorization: Bearer {SUPABAS
 ### 4.2 `POST join-session` — 志愿者加入
 请求:`{"code":"482913","name":"小王"}`
 响应:`{"session_id":"uuid","lk_url":"wss://...","lk_token":"<jwt>"}`
-错误:404 房间码不存在 / 410 会话已结束。
+错误:404 房间码不存在 / 409 已有志愿者接入 / 410 会话已结束 / 423 会话已冻结。
 
 ### 4.3 `POST ai-guide` — AI 引导（老人端调用）
 请求:
@@ -102,7 +102,8 @@ SUPABASE_URL      = <B 填>
 SUPABASE_ANON_KEY = <B 填>
 LIVEKIT_URL       = <B 填>
 ```
-Secrets（LIVEKIT_API_KEY/SECRET、ANTHROPIC_API_KEY）只进 Supabase secrets，
+LiveKit Secrets（LIVEKIT_API_KEY/SECRET）只进 Supabase secrets；可选的
+ANTHROPIC_API_KEY 仅供 AI 端点使用，
 **永远不进本仓库、不进任何客户端**。
 
 ## 7. 各自独立开发的 Mock 策略（不互相阻塞）

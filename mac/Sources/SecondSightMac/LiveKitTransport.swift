@@ -5,8 +5,11 @@ import SecondSightCore
 
 final class LiveKitTransport: NSObject, RoomDelegate, @unchecked Sendable {
     var onVolunteerJoined: (@Sendable (String) -> Void)?
+    var onVolunteerLeft: (@Sendable (String) -> Void)?
     var onDataMessage: (@Sendable (DataMessage) -> Void)?
     var onRemoteAudioTrack: (@Sendable (RemoteAudioTrack) -> Void)?
+    var onRemoteCameraTrack: (@Sendable (RemoteVideoTrack) -> Void)?
+    var onRemoteCameraTrackRemoved: (@Sendable () -> Void)?
     var onMediaError: (@Sendable (ElderMediaKind, Error) -> Void)?
     var onAllMediaReady: (@Sendable () -> Void)?
     var onError: (@Sendable (Error) -> Void)?
@@ -205,11 +208,35 @@ final class LiveKitTransport: NSObject, RoomDelegate, @unchecked Sendable {
         onVolunteerJoined?(identity)
     }
 
+    func room(_ room: Room, participantDidDisconnect participant: RemoteParticipant) {
+        let identity = participant.identity?.stringValue ?? ""
+        guard identity.hasPrefix("volunteer:") else { return }
+
+        let shouldNotify = withState {
+            guard isConnected, room.connectionState == .connected else { return false }
+            return !room.remoteParticipants.values.contains {
+                $0.identity?.stringValue.hasPrefix("volunteer:") == true
+            }
+        }
+        if shouldNotify { onVolunteerLeft?(identity) }
+    }
+
     func room(_ room: Room, participant: RemoteParticipant, didSubscribeTrack publication: RemoteTrackPublication) {
+        guard participant.identity?.stringValue.hasPrefix("volunteer:") == true else { return }
+        if let audio = publication.track as? RemoteAudioTrack {
+            onRemoteAudioTrack?(audio)
+        } else if publication.source == .camera,
+                  let camera = publication.track as? RemoteVideoTrack
+        {
+            onRemoteCameraTrack?(camera)
+        }
+    }
+
+    func room(_ room: Room, participant: RemoteParticipant, didUnsubscribeTrack publication: RemoteTrackPublication) {
         guard participant.identity?.stringValue.hasPrefix("volunteer:") == true,
-              let audio = publication.track as? RemoteAudioTrack
+              publication.source == .camera
         else { return }
-        onRemoteAudioTrack?(audio)
+        onRemoteCameraTrackRemoved?()
     }
 
     func room(

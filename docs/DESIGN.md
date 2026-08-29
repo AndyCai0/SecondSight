@@ -94,19 +94,28 @@ idle → requesting(创建会话,拿6位码) → waiting(展示大字号房间�
 
 ### 2.4 打码管线（Redaction）— 本项目技术核心之一
 
-两层防护，都是确定性逻辑，**不做任何视觉识别**:
+三层防护，都是确定性逻辑，**不做任何视觉识别**:
 
-1. **AX 扫描（~5 Hz 独立定时器，不逐帧）**:
+1. **AX 焦点事件 + 扫描兜底（~5 Hz）**:
+   - 监听焦点应用、焦点窗口和焦点控件变化；老人点击任意可编辑控件后立即遮挡，
+     不等待第一个字符进入视频帧。定时器用于处理浏览器漏发 AX 通知和自动填充变化。
    - 用 Accessibility API（`AXUIElementCreateSystemWide` → 焦点应用 → 遍历窗口控件树）
      找出所有 `AXSecureTextField` 及其屏幕坐标 `AXFrame`。
-   - 同时收集普通 `AXTextField` 中 label/placeholder 命中敏感词
-     （password/PIN/验证码/card number/CVV 等）的。
+   - 所有 `AXTextField`、`AXTextArea`、`AXComboBox`、搜索框及浏览器报告为
+     editable 的控件，在获得焦点时遮挡；只要值非空，失焦后继续遮挡，清空后解除。
+     扫描只判断值是否为空，不保存、记录或发出实际内容。
+   - 同时保留普通输入框 label/placeholder 敏感词规则，并遮挡焦点输入框附近的小型
+     menu/list/popover/window，覆盖密码管理器和浏览器自动填充候选；若系统候选窗口
+     属于独立进程、暂时无法从 AX 定位，则先保护输入框下方的常见候选区域。
    - 产出 `[CGRect]`（屏幕坐标系），存入线程安全的 `currentRedactionRects`。
+   - 发给 AI 的 AX 摘要会删除所有遮挡区域内的 title，并标记
+     `privacy_protected=true`，避免旁路泄露。
    - 坐标记得处理 AX（左上原点）与 CoreGraphics/采集帧的坐标系换算及 Retina scale。
 2. **安全输入模式全局兜底**:轮询 `IsSecureEventInputEnabled()`。
    为 true（说明系统里有密码框正在接受输入）且 AX 没定位到具体矩形时，
    **整帧替换为占位图**（"正在输入敏感信息，画面已暂停"），宁可黑屏不可泄露。
-3. **帧处理**:每帧把 `currom` 的矩形区域用 CoreImage `CIPixellate`（或纯色块，
+   AX 权限不可用或扫描尚未产生可信快照时同样整帧占位，禁止原帧直接放行。
+3. **帧处理**:每帧把当前矩形区域用 CoreImage `CIPixellate`（或纯色块，
    更快更稳）覆盖后再发布。矩形向外扩 8px margin，防止 AX 坐标毫秒级滞后。
 
 验收标准:在 Safari 打开任意登录页点进密码框，志愿者端看到的对应区域必须是马赛克/
@@ -223,8 +232,8 @@ Edge Function（service_role）**;客户端只读需求也走 function。这样 
    → `{session_id, code, lk_url, lk_token}`
 2. **`join-session`** (POST `{code, name}`)
    → 查 sessions 校验 status=waiting|active，更新 volunteer_label、status=active，
-   签 token（identity=`volunteer:{name}`，**canPublishSources 仅 microphone**——
-   在 token 层面就禁止志愿者发布屏幕/摄像头，纵深防御）
+   签 token（identity=`volunteer:{name}`，**canPublishSources 仅 microphone + camera**——
+   支持双向视频，同时在 token 层面继续禁止志愿者发布屏幕）
    → `{session_id, lk_url, lk_token}`
 3. **`ai-guide`** (POST `{session_id, task, screenshot_base64, ax_summary}`)
    → 调 Claude（`claude-sonnet-5`，vision）。System prompt 要点:你在指导不熟悉

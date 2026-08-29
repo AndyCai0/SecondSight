@@ -1,8 +1,9 @@
 # SecondSight Supabase backend
 
-The three database tables are private behind deny-by-default RLS. Browsers and the Mac app call the
-five contract Edge Functions plus the demo-only read-only `list-alerts` function with the project's
-public anonymous key; only the functions hold the database, LiveKit, and Anthropic secrets.
+The application database tables are private behind deny-by-default RLS. Browsers and the Mac app call
+the contract Edge Functions, broadcast discovery functions, and demo-only read-only `list-alerts` function with the project's
+public anonymous key; only the functions hold the database and provider secrets. LiveKit is required
+for rooms and real-time media. Anthropic is optional and only enables the two AI endpoints.
 
 ## Configure and deploy
 
@@ -13,20 +14,29 @@ supabase db push
 supabase secrets set \
   LIVEKIT_URL=wss://YOUR_PROJECT.livekit.cloud \
   LIVEKIT_API_KEY=YOUR_LIVEKIT_API_KEY \
-  LIVEKIT_API_SECRET=YOUR_LIVEKIT_API_SECRET \
-  ANTHROPIC_API_KEY=YOUR_ANTHROPIC_API_KEY
+  LIVEKIT_API_SECRET=YOUR_LIVEKIT_API_SECRET
+# Optional, only when AI guidance/referee is intentionally enabled:
+supabase secrets set AI_ENABLED=true ANTHROPIC_API_KEY=YOUR_ANTHROPIC_API_KEY
 supabase functions deploy create-session
 supabase functions deploy join-session
 supabase functions deploy ai-guide
 supabase functions deploy ai-referee
 supabase functions deploy log-event
 supabase functions deploy list-alerts
+supabase functions deploy broadcast-session
+supabase functions deploy assistant-poll
+supabase functions deploy claim-broadcast
 ```
 
-Hosted Supabase supplies `SUPABASE_URL` and the current `SUPABASE_SECRET_KEYS` JSON map. The runtime
-reads its `default` key and also supports the legacy `SUPABASE_SERVICE_ROLE_KEY` used by local or
-older projects. Never put a server key, the LiveKit API secret, or the Anthropic key in `web/` or
-`docs/CONTRACT.md`.
+Hosted Supabase supplies `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and the current
+`SUPABASE_SECRET_KEYS` JSON map. Hosted functions also use their built-in `SUPABASE_DB_URL` for
+server-only database operations, avoiding any dependency on client RLS credentials. The REST
+service-key path remains available for local environments without that database URL. New opaque
+`sb_secret_...` values are sent to PostgREST only through its `apikey` header; sending one as
+`Authorization: Bearer` makes the gateway reject it as an invalid JWT.
+Unless both `AI_ENABLED=true` and `ANTHROPIC_API_KEY` are present, `ai-guide` and `ai-referee`
+return HTTP 503 while room creation, joining, and LiveKit media remain available. Never put a
+server key, the LiveKit API secret, or an Anthropic key in `web/` or `docs/CONTRACT.md`.
 
 Local function serving additionally needs Docker and the Supabase CLI:
 

@@ -47,9 +47,10 @@ cp Config.template.plist Config.plist
 ## 模块与 TASK A 对应关系
 
 - A1：`AppModel` + `SecondSightApp` 的 `idle → requesting → waiting → connected → frozen → ended` 状态机；原窗口内展示 6 位房间码并使用中文 TTS 朗读。
+- 志愿者网页端离开 LiveKit 房间后，Mac 端会自动结束本次求助并同步显示结束状态；Mac 主动结束时不会重复处理离开回调。
 - A2：`PermissionManager` + 主页权限卡片当前检查屏幕录制、辅助功能和麦克风；启用 AI 后才追加语音识别。系统提示出现时用不拦截点击的浮动箭头指向“打开系统设置”。进入系统设置后，若辅助功能已授权则从控件树精确定位 `SecondSightMac` 行，否则使用窗口内保守回退位置；提示窗显示在目标开关上方并用向下箭头指引点击，也可直接跳转对应权限页面。
 - A3：`ScreenCaptureService` 用 ScreenCaptureKit 采主显示器 12fps，按 bundle id 排除本 App 窗口；用户点击“求助”并确认隐私提示后，`LiveKitTransport` 同时发布 720p/15fps 的 `elder-camera` 摄像头轨、`screen-redacted` 打码屏幕轨和 `elder-microphone` 麦克风轨。志愿者端应按轨道名分别展示两条视频。
-- A4：`AccessibilityScanner` 5Hz 扫描 secure text field/敏感标题；`FrameRedactor` 先复制帧，再按 Retina 比例覆盖黑块；Secure Event Input 无定位矩形时整屏替换为安全占位图。
+- A4：`AccessibilityScanner` 用 AX 焦点事件即时触发并以 5Hz 扫描兜底；所有获得焦点的可编辑控件会在老人开始输入前遮挡，非空控件失焦后仍保持遮挡，邻近的密码/自动填充候选窗口一并保护；跨进程候选无法定位时先保护输入框下方的常见候选区域。扫描只判断本机值是否为空，不保存或写入摘要；`FrameRedactor` 先复制帧，再按 Retina 比例覆盖黑块。Secure Event Input 无定位矩形、AX 权限不可用或扫描尚未就绪时，整屏替换为安全占位图。
 - A5：`OverlayWindowController` 是必要的薄 AppKit 窗口桥接，内容由 SwiftUI `OverlayView` 渲染圆圈、箭头、pointer、TTL 和 clear。`DataMessageCodec` 在解析边界拒绝 `volunteer:*` 的全部 `control.*`。
 - A6：`RemoteAudioTrack.add(audioRenderer:)` 把志愿者 PCM 帧交给本机 `SFSpeechRecognizer`；final/5 秒切段调用 `ai-referee`，warn/freeze/resume 连接到悬浮层、TTS、unpublish/republish、DataChannel 和 `log-event`。网络失败时本地敏感词兜底。
 - A7：SwiftUI “按住说话”转写任务；只取 `LatestFrameStore` 中已经打码的帧，JPEG 长边不超过 1568px；AX 摘要深度不超过 4 且不超过 8KB；响应圈选并 TTS。
@@ -59,7 +60,7 @@ cp Config.template.plist Config.plist
 1. 打开“第二双眼睛”，在主页权限卡片中依次授权。屏幕录制授权后退出并重新打开 App。
 2. 填好真实公开配置，点“求助”，确认原窗口出现 6 位码且会朗读，同时没有弹出新的房间码窗口。
 3. 点击“求助”后确认摄像头隐私提示；志愿者加入后确认原窗口内的房间码区域自动收起，LiveKit dashboard 出现 `elder-camera`、`screen-redacted` 和 `elder-microphone` 三条轨。志愿者页面需按名称分别展示两条视频。
-4. Safari 打开登录页，聚焦密码框；从志愿者视角确认对应区域在 300ms 内变黑。对 AX 无法定位但启用 Secure Event Input 的页面，应看到整屏安全占位图。
+4. Safari 和 Chrome 分别打开登录页：点击空邮箱框后，在输入第一个字符前确认志愿者视角已经变黑；输入后切走焦点仍应保持遮挡，清空后才解除。触发 iCloud 密码/浏览器自动填充候选时，确认邻近候选窗口也被遮挡。对 AX 无法定位、权限不可用或启用 Secure Event Input 的页面，应看到整屏安全占位图。
 5. 确认原窗口内的房间码、悬浮圈和冻结警告不出现在志愿者视频里。
 6. 从志愿者端发 circle/arrow/pointer/clear 并核对坐标；伪造 `control.freeze` 必须被老人端丢弃。
 7. 志愿者说“把验证码念给我”，确认全屏红色冻结、音视频轨停止、双方收到 freeze 状态；老人点“是误报，继续通话”后恢复。

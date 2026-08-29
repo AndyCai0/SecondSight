@@ -16,6 +16,78 @@ public enum SensitiveTextPolicy {
     }
 }
 
+public enum InputPrivacyPolicy {
+    private static let editableRoles: Set<String> = [
+        "AXTextField",
+        "AXTextArea",
+        "AXComboBox",
+    ]
+    private static let editableSubroles: Set<String> = [
+        "AXSearchField",
+        "AXSecureTextField",
+    ]
+    private static let suggestionSurfaceRoles: Set<String> = [
+        "AXDialog",
+        "AXList",
+        "AXMenu",
+        "AXPopover",
+        "AXSheet",
+        "AXWindow",
+    ]
+
+    public static func isEditable(role: String, subrole: String, reportsEditable: Bool) -> Bool {
+        reportsEditable || editableRoles.contains(role) || editableSubroles.contains(subrole)
+    }
+
+    public static func shouldRedactEditable(
+        role: String,
+        subrole: String,
+        reportsEditable: Bool,
+        isFocused: Bool,
+        hasNonEmptyValue: Bool
+    ) -> Bool {
+        guard isEditable(role: role, subrole: subrole, reportsEditable: reportsEditable) else { return false }
+        return subrole == "AXSecureTextField" || isFocused || hasNonEmptyValue
+    }
+
+    public static func isSuggestionSurface(role: String) -> Bool {
+        suggestionSurfaceRoles.contains(role)
+    }
+
+    public static func shouldRedactSuggestionSurface(
+        _ surfaceFrame: CGRect,
+        near focusedInputFrame: CGRect
+    ) -> Bool {
+        guard !surfaceFrame.isNull,
+              !surfaceFrame.isEmpty,
+              !focusedInputFrame.isNull,
+              !focusedInputFrame.isEmpty
+        else { return false }
+
+        // Password managers and browser autofill panels are normally small,
+        // transient surfaces anchored to the active input. Reject the main
+        // application window while still covering the nearby popup as a unit.
+        let maximumWidth = max(720, focusedInputFrame.width * 2.5)
+        let maximumHeight = max(480, focusedInputFrame.height * 12)
+        guard surfaceFrame.width <= maximumWidth, surfaceFrame.height <= maximumHeight else { return false }
+
+        let horizontalReach = max(220, focusedInputFrame.width)
+        let verticalReach = max(360, focusedInputFrame.height * 10)
+        let vicinity = focusedInputFrame.insetBy(dx: -horizontalReach, dy: -verticalReach)
+        return vicinity.intersects(surfaceFrame)
+    }
+
+    public static func fallbackSuggestionFrame(under focusedInputFrame: CGRect) -> CGRect {
+        guard !focusedInputFrame.isNull, !focusedInputFrame.isEmpty else { return .null }
+        return CGRect(
+            x: focusedInputFrame.minX,
+            y: focusedInputFrame.maxY,
+            width: max(520, focusedInputFrame.width),
+            height: max(180, focusedInputFrame.height * 3)
+        ).integral
+    }
+}
+
 public struct CaptureGeometry: Equatable, Sendable {
     public let displayFramePoints: CGRect
     public let frameSizePixels: CGSize

@@ -4,6 +4,7 @@ import {
   createAnthropicClient,
   createAssemblyAIClient,
   createProductionDependencies,
+  createSupabaseServiceFetcher,
   readProductionConfig,
 } from '../functions/_shared/dependencies.ts'
 
@@ -27,6 +28,41 @@ Deno.test('production config reads the current hosted Supabase secret-key map', 
     anthropicApiKey: values.ANTHROPIC_API_KEY,
     assemblyAIApiKey: values.ASSEMBLYAI_API_KEY,
   })
+})
+
+Deno.test('hosted Supabase secret keys use apikey without an invalid bearer header', async () => {
+  let capturedHeaders = new Headers()
+  const fetcher = createSupabaseServiceFetcher('sb_secret_example', async (_input, init) => {
+    capturedHeaders = new Headers(init?.headers)
+    return Response.json([])
+  })
+
+  await fetcher('https://project.supabase.co/rest/v1/sessions', {
+    headers: {
+      apikey: 'sb_secret_example',
+      authorization: 'Bearer sb_secret_example',
+    },
+  })
+
+  assert.equal(capturedHeaders.get('apikey'), 'sb_secret_example')
+  assert.equal(capturedHeaders.has('authorization'), false)
+})
+
+Deno.test('legacy service-role JWT keeps its bearer header', async () => {
+  let capturedHeaders = new Headers()
+  const fetcher = createSupabaseServiceFetcher('legacy-service-role-jwt', async (_input, init) => {
+    capturedHeaders = new Headers(init?.headers)
+    return Response.json([])
+  })
+
+  await fetcher('https://project.supabase.co/rest/v1/sessions', {
+    headers: {
+      apikey: 'legacy-service-role-jwt',
+      authorization: 'Bearer legacy-service-role-jwt',
+    },
+  })
+
+  assert.equal(capturedHeaders.get('authorization'), 'Bearer legacy-service-role-jwt')
 })
 
 Deno.test('AssemblyAI adapter requests a bounded temporary streaming token server-side', async () => {

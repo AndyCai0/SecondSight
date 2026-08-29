@@ -50,6 +50,9 @@ export function createProductionDependencies(
       detectSessionInUrl: false,
       persistSession: false,
     },
+    global: {
+      fetch: createSupabaseServiceFetcher(config.supabaseServiceKey, fetcher),
+    },
   })
   const ai = createAnthropicClient(config.anthropicApiKey, fetcher)
   const assemblyAI = createAssemblyAIClient(config.assemblyAIApiKey, fetcher)
@@ -191,6 +194,21 @@ export function createLiveKitElderCredentialVerifier(apiKey: string, apiSecret: 
       return { identity, room }
     },
   }
+}
+
+export function createSupabaseServiceFetcher(
+  serviceKey: string,
+  fetcher: Fetcher = fetch,
+): Fetcher {
+  if (!serviceKey.startsWith('sb_secret_')) return fetcher
+
+  return ((input, init) => {
+    const headers = new Headers(
+      init?.headers ?? (input instanceof Request ? input.headers : undefined),
+    )
+    headers.delete('authorization')
+    return fetcher(input, { ...init, headers })
+  }) as Fetcher
 }
 
 export function createAssemblyAIClient(apiKey: string, fetcher: Fetcher = fetch) {

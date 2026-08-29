@@ -43,8 +43,9 @@ npm exec -- supabase start
 npm exec -- supabase functions serve --env-file functions/.env
 ```
 
-The CLI is pinned in `package.json`; run it through `npm exec --` so every collaborator uses the same
-version. `.env`, `.env.deploy`, `.branches`, and `.temp` are local-only and must not be committed.
+The CLI is pinned in `package.json`; run it through `npm exec --` so every collaborator uses the
+same version. `.env`, `.env.deploy`, `.branches`, and `.temp` are local-only and must not be
+committed.
 
 Run the Web client in a second terminal:
 
@@ -128,8 +129,8 @@ curl --fail-with-body "$SECOND_SIGHT_FUNCTIONS_URL/ai-referee" \
 
 Request a temporary AssemblyAI streaming credential:
 
-`SECOND_SIGHT_ELDER_TOKEN` is the `lk_token` returned by `create-session` for that elder
-session. It is a short-lived capability, not a server secret; do not reuse a volunteer token.
+`SECOND_SIGHT_ELDER_TOKEN` is the `lk_token` returned by `create-session` for that elder session. It
+is a short-lived capability, not a server secret; do not reuse a volunteer token.
 
 ```bash
 curl --fail-with-body "$SECOND_SIGHT_FUNCTIONS_URL/assemblyai-token" \

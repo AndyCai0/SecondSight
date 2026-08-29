@@ -8,6 +8,7 @@
     "test": "deno test --allow-env --allow-read tests"
   },
   "devDependencies": {
-    "deno": "2.9.6"
+    "deno": "2.9.6",
+    "supabase": "2.116.0"
   }
 }

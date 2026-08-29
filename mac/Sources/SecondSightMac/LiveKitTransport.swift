@@ -7,6 +7,7 @@ final class LiveKitTransport: NSObject, RoomDelegate, @unchecked Sendable {
     var onVolunteerJoined: (@Sendable (String) -> Void)?
     var onDataMessage: (@Sendable (DataMessage) -> Void)?
     var onRemoteAudioTrack: (@Sendable (RemoteAudioTrack) -> Void)?
+    var onRemoteAudioTrackUnavailable: (@Sendable () -> Void)?
     var onError: (@Sendable (Error) -> Void)?
 
     private let lock = NSLock()
@@ -99,11 +100,23 @@ final class LiveKitTransport: NSObject, RoomDelegate, @unchecked Sendable {
         onVolunteerJoined?(identity)
     }
 
+    func room(_ room: Room, participantDidDisconnect participant: RemoteParticipant) {
+        guard participant.identity?.stringValue.hasPrefix("volunteer:") == true else { return }
+        onRemoteAudioTrackUnavailable?()
+    }
+
     func room(_ room: Room, participant: RemoteParticipant, didSubscribeTrack publication: RemoteTrackPublication) {
         guard participant.identity?.stringValue.hasPrefix("volunteer:") == true,
               let audio = publication.track as? RemoteAudioTrack
         else { return }
         onRemoteAudioTrack?(audio)
+    }
+
+    func room(_ room: Room, participant: RemoteParticipant, didUnsubscribeTrack publication: RemoteTrackPublication) {
+        guard participant.identity?.stringValue.hasPrefix("volunteer:") == true,
+              publication.kind == .audio
+        else { return }
+        onRemoteAudioTrackUnavailable?()
     }
 
     func room(

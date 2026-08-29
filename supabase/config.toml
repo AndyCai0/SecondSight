@@ -17,3 +17,9 @@ verify_jwt = true
 
 [functions.list-alerts]
 verify_jwt = true
+
+[functions.assemblyai-token]
+verify_jwt = true
+
+[functions.risk-event]
+verify_jwt = true

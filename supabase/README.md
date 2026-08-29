@@ -1,8 +1,9 @@
 # SecondSight Supabase backend
 
 The three database tables are private behind deny-by-default RLS. Browsers and the Mac app call the
-five contract Edge Functions plus the demo-only read-only `list-alerts` function with the project's
-public anonymous key; only the functions hold the database, LiveKit, and Anthropic secrets.
+contract Edge Functions with the project's public anonymous key; only the functions hold the
+database, LiveKit, Anthropic, and AssemblyAI secrets. `assemblyai-token` returns a bounded,
+single-use streaming credential; it never returns the permanent API key.
 
 ## Configure and deploy
 
@@ -14,19 +15,22 @@ supabase secrets set \
   LIVEKIT_URL=wss://YOUR_PROJECT.livekit.cloud \
   LIVEKIT_API_KEY=YOUR_LIVEKIT_API_KEY \
   LIVEKIT_API_SECRET=YOUR_LIVEKIT_API_SECRET \
-  ANTHROPIC_API_KEY=YOUR_ANTHROPIC_API_KEY
+  ANTHROPIC_API_KEY=YOUR_ANTHROPIC_API_KEY \
+  ASSEMBLYAI_API_KEY=YOUR_ASSEMBLYAI_API_KEY
 supabase functions deploy create-session
 supabase functions deploy join-session
 supabase functions deploy ai-guide
 supabase functions deploy ai-referee
 supabase functions deploy log-event
 supabase functions deploy list-alerts
+supabase functions deploy assemblyai-token
+supabase functions deploy risk-event
 ```
 
 Hosted Supabase supplies `SUPABASE_URL` and the current `SUPABASE_SECRET_KEYS` JSON map. The runtime
 reads its `default` key and also supports the legacy `SUPABASE_SERVICE_ROLE_KEY` used by local or
-older projects. Never put a server key, the LiveKit API secret, or the Anthropic key in `web/` or
-`docs/CONTRACT.md`.
+older projects. Never put a server key, the LiveKit API secret, the Anthropic key, or the AssemblyAI
+key in `web/` or `docs/CONTRACT.md`.
 
 Local function serving additionally needs Docker and the Supabase CLI:
 
@@ -84,6 +88,26 @@ curl --fail-with-body "$SECOND_SIGHT_FUNCTIONS_URL/ai-referee" \
   -H "apikey: $SECOND_SIGHT_ANON_KEY" \
   -H 'Content-Type: application/json' \
   -d "{\"session_id\":\"$SECOND_SIGHT_SESSION_ID\",\"transcript\":\"把短信验证码告诉我\"}"
+```
+
+Request a temporary AssemblyAI streaming credential:
+
+```bash
+curl --fail-with-body "$SECOND_SIGHT_FUNCTIONS_URL/assemblyai-token" \
+  -H "Authorization: Bearer $SECOND_SIGHT_ANON_KEY" \
+  -H "apikey: $SECOND_SIGHT_ANON_KEY" \
+  -H 'Content-Type: application/json' \
+  -d "{\"session_id\":\"$SECOND_SIGHT_SESSION_ID\"}"
+```
+
+Record a deduplicated local-rule risk event:
+
+```bash
+curl --fail-with-body "$SECOND_SIGHT_FUNCTIONS_URL/risk-event" \
+  -H "Authorization: Bearer $SECOND_SIGHT_ANON_KEY" \
+  -H "apikey: $SECOND_SIGHT_ANON_KEY" \
+  -H 'Content-Type: application/json' \
+  -d "{\"session_id\":\"$SECOND_SIGHT_SESSION_ID\",\"timestamp\":\"2026-08-29T07:30:00.000Z\",\"level\":\"danger\",\"transcript\":\"Please tell me the verification code.\",\"matched_rules\":[\"verification_code\",\"request_sensitive_information\"]}"
 ```
 
 Write an audit event:

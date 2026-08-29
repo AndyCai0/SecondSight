@@ -36,6 +36,18 @@ final class EdgeAPIClient: @unchecked Sendable {
         try await post(path: "ai-referee", body: request, response: AIRefereeResponse.self)
     }
 
+    func createAssemblyAIStreamingCredential(sessionID: UUID) async throws -> AssemblyAIStreamingCredential {
+        try await post(
+            path: "assemblyai-token",
+            body: AssemblyAITokenRequest(sessionID: sessionID),
+            response: AssemblyAIStreamingCredential.self
+        )
+    }
+
+    func recordRiskEvent(_ request: RiskEventRequest) async throws -> RiskEventResponse {
+        try await post(path: "risk-event", body: request, response: RiskEventResponse.self)
+    }
+
     func logEvent(_ request: LogEventRequest) async {
         _ = try? await post(path: "log-event", body: request, response: LogEventResponse.self)
     }

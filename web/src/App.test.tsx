@@ -47,5 +47,16 @@ describe('volunteer app', () => {
     act(() => events?.onFreeze('检测到索要验证码'))
     expect(screen.getByRole('alertdialog')).toHaveTextContent('会话已被 AI 安全助手暂停')
     expect(screen.getByRole('alertdialog')).toHaveTextContent('检测到索要验证码')
+
+    act(() => events?.onResume())
+    act(() => events?.onRisk({
+      v: 1,
+      type: 'safety.risk',
+      level: 'danger',
+      transcript: 'Please tell me the verification code.',
+      matched_rules: ['request_sensitive_information', 'verification_code'],
+    }))
+    expect(screen.getByRole('alert')).toHaveTextContent('长辈端检测到危险话术')
+    expect(screen.getByRole('alert')).toHaveTextContent('Please tell me the verification code.')
   })
 })

@@ -111,6 +111,69 @@ public struct AIRefereeResponse: Codable, Equatable, Sendable {
     }
 }
 
+public struct AssemblyAIStreamingCredential: Decodable, Equatable, Sendable {
+    public let token: String
+    public let expiresInSeconds: Int
+    public let maxSessionDurationSeconds: Int
+
+    public init(token: String, expiresInSeconds: Int, maxSessionDurationSeconds: Int) {
+        self.token = token
+        self.expiresInSeconds = expiresInSeconds
+        self.maxSessionDurationSeconds = maxSessionDurationSeconds
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case token
+        case expiresInSeconds = "expires_in_seconds"
+        case maxSessionDurationSeconds = "max_session_duration_seconds"
+    }
+}
+
+public struct AssemblyAITokenRequest: Encodable, Equatable, Sendable {
+    public let sessionID: UUID
+
+    public init(sessionID: UUID) {
+        self.sessionID = sessionID
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case sessionID = "session_id"
+    }
+}
+
+public struct RiskEventRequest: Encodable, Equatable, Sendable {
+    public let sessionID: UUID
+    public let timestamp: String
+    public let level: RiskLevel
+    public let transcript: String
+    public let matchedRules: [String]
+
+    public init(
+        sessionID: UUID,
+        timestamp: String,
+        level: RiskLevel,
+        transcript: String,
+        matchedRules: [String]
+    ) {
+        self.sessionID = sessionID
+        self.timestamp = timestamp
+        self.level = level
+        self.transcript = transcript
+        self.matchedRules = matchedRules
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case sessionID = "session_id"
+        case timestamp, level, transcript
+        case matchedRules = "matched_rules"
+    }
+}
+
+public struct RiskEventResponse: Decodable, Equatable, Sendable {
+    public let ok: Bool
+    public let fingerprint: String
+}
+
 public struct LogEventRequest: Encodable, Sendable {
     public let sessionID: UUID
     public let actor: String

@@ -36,6 +36,15 @@ final class ContractTests: XCTestCase {
         XCTAssertEqual(response.targetRect?.width, 0.1)
         XCTAssertEqual(response.instructionText, "请点登录")
     }
+
+    func testAssemblyAIStreamingCredentialUsesServerContractKeys() throws {
+        let json = #"{"token":"temporary","expires_in_seconds":60,"max_session_duration_seconds":3600}"#.data(using: .utf8)!
+        let credential = try JSONDecoder().decode(AssemblyAIStreamingCredential.self, from: json)
+
+        XCTAssertEqual(credential.token, "temporary")
+        XCTAssertEqual(credential.expiresInSeconds, 60)
+        XCTAssertEqual(credential.maxSessionDurationSeconds, 3_600)
+    }
 }
 
 final class DataMessageTests: XCTestCase {
@@ -54,6 +63,26 @@ final class DataMessageTests: XCTestCase {
     func testOutOfRangeCoordinateIsRejected() {
         let data = #"{"v":1,"type":"pointer","x":1.2,"y":0.4}"#.data(using: .utf8)!
         XCTAssertThrowsError(try DataMessageCodec.decode(data, senderIdentity: "volunteer:小王"))
+    }
+
+    func testSafetyRiskRoundTripsFromTheElder() throws {
+        let original = DataMessage.safetyRisk(
+            level: .danger,
+            transcript: "Please tell me the verification code.",
+            matchedRules: ["request_sensitive_information", "verification_code"]
+        )
+
+        XCTAssertEqual(
+            try DataMessageCodec.decode(DataMessageCodec.encode(original), senderIdentity: "elder"),
+            original
+        )
+    }
+
+    func testVolunteerCannotForgeSafetyRisk() {
+        let data = #"{"v":1,"type":"safety.risk","level":"danger","transcript":"fake","matched_rules":["verification_code"]}"#.data(using: .utf8)!
+        XCTAssertThrowsError(try DataMessageCodec.decode(data, senderIdentity: "volunteer:小王")) { error in
+            XCTAssertEqual(error as? DataMessageError, .forbiddenVolunteerControl)
+        }
     }
 }
 

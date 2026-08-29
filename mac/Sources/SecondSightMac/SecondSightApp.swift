@@ -75,6 +75,10 @@ struct MenuContentView: View {
                             .monospacedDigit()
                     }
 
+                    if model.phase == .connected {
+                        SafetyMonitoringCard(model: model)
+                    }
+
                     VStack(alignment: .leading, spacing: 10) {
                         Text("AI 帮我")
                             .font(.system(size: 26, weight: .bold))
@@ -118,6 +122,77 @@ struct MenuContentView: View {
             .frame(maxWidth: .infinity, alignment: .center)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+private struct SafetyMonitoringCard: View {
+    @ObservedObject var model: AppModel
+
+    private var isRunningOrConnecting: Bool {
+        model.safetyState == .listening || model.safetyState == .connecting
+    }
+
+    private var statusColor: Color {
+        switch model.safetyState {
+        case .listening: .green
+        case .connecting: .orange
+        case .disconnected: .red
+        case .off: .secondary
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .firstTextBaseline) {
+                Image(systemName: model.safetyState == .listening ? "shield.checkered" : "shield")
+                    .font(.system(size: 30, weight: .bold))
+                    .foregroundStyle(statusColor)
+                Text(model.safetyState.headline)
+                    .font(.system(size: 26, weight: .heavy))
+                    .foregroundStyle(statusColor)
+            }
+
+            Text(model.safetyStatusMessage)
+                .font(.system(size: 23, weight: .semibold))
+                .fixedSize(horizontal: false, vertical: true)
+
+            Button(action: model.toggleSafetyListening) {
+                Text(isRunningOrConnecting ? "Stop Safety Listening" : "Start Safety Listening")
+                    .font(.system(size: 25, weight: .heavy))
+                    .frame(maxWidth: .infinity, minHeight: 54)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(isRunningOrConnecting ? .red : .green)
+            .controlSize(.large)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Live Transcript")
+                    .font(.system(size: 24, weight: .heavy))
+                if model.recentTranscriptLines.isEmpty && model.livePartialTranscript.isEmpty {
+                    Text("Transcript will appear here after listening starts.")
+                        .font(.system(size: 21))
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(Array(model.recentTranscriptLines.enumerated()), id: \.offset) { _, line in
+                        Text(line)
+                            .font(.system(size: 22, weight: .medium))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if !model.livePartialTranscript.isEmpty {
+                        Text(model.livePartialTranscript)
+                            .font(.system(size: 22, weight: .bold))
+                            .foregroundStyle(.blue)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.background.opacity(0.7), in: RoundedRectangle(cornerRadius: 12))
+        }
+        .padding(16)
+        .background(statusColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(statusColor.opacity(0.7), lineWidth: 2))
     }
 }
 

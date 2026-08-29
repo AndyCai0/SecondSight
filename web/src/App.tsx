@@ -6,7 +6,7 @@ import {
   type JoinedSession,
   type SecondSightApi,
 } from './api'
-import type { VolunteerOutboundMessage } from './contracts'
+import type { SafetyRiskMessage, VolunteerOutboundMessage } from './contracts'
 import {
   connectVolunteerSession,
   type ConnectVolunteerSession,
@@ -40,6 +40,7 @@ function App({ api, connectSession = connectVolunteerSession }: AppProps) {
   const [frozenReason, setFrozenReason] = useState<string | null>(null)
   const [hasMedia, setHasMedia] = useState(false)
   const [auditFailed, setAuditFailed] = useState(false)
+  const [safetyRisk, setSafetyRisk] = useState<SafetyRiskMessage | null>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
   const audioRef = useRef<HTMLAudioElement>(null)
   const currentSession = useRef<VolunteerSession | null>(null)
@@ -75,6 +76,7 @@ function App({ api, connectSession = connectVolunteerSession }: AppProps) {
     setJoining(true)
     setHasMedia(false)
     setAuditFailed(false)
+    setSafetyRisk(null)
     manualDisconnect.current = false
     try {
       const joined = await configuredApi.joinSession({ code, name: name.trim() })
@@ -88,6 +90,7 @@ function App({ api, connectSession = connectVolunteerSession }: AppProps) {
           setError('连接已断开，请重新进入房间')
         },
         onMediaChanged: () => setHasMedia(true),
+        onRisk: (risk) => setSafetyRisk(risk),
       })
       currentSession.current = live
       setActive({ joined, live, code, volunteerName: name.trim() })
@@ -106,6 +109,7 @@ function App({ api, connectSession = connectVolunteerSession }: AppProps) {
     setActive(null)
     setFrozenReason(null)
     setHasMedia(false)
+    setSafetyRisk(null)
   }
 
   function audit(message: VolunteerOutboundMessage): void {
@@ -204,6 +208,19 @@ function App({ api, connectSession = connectVolunteerSession }: AppProps) {
               </button>
             </div>
           </section>
+
+          {safetyRisk && (
+            <section className={`safety-risk-card ${safetyRisk.level}`} role="alert">
+              <div className="safety-risk-icon" aria-hidden="true">!</div>
+              <div>
+                <p className="eyebrow">实时安全提醒</p>
+                <h2>长辈端检测到危险话术</h2>
+                <p className="risk-transcript">“{safetyRisk.transcript}”</p>
+                <p>请立即停止询问验证码、密码、付款信息或远程控制权限。</p>
+              </div>
+              <button type="button" onClick={() => setSafetyRisk(null)}>我知道了</button>
+            </section>
+          )}
 
           <AnnotationSurface
             videoRef={videoRef}

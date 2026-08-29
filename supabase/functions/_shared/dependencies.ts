@@ -14,6 +14,7 @@ export interface ProductionConfig {
   liveKitApiSecret: string
   liveKitUrl: string
   anthropicApiKey: string
+  assemblyAIApiKey: string
 }
 
 type EnvironmentReader = (name: string) => string | undefined
@@ -35,6 +36,7 @@ export function readProductionConfig(
     liveKitApiSecret: requiredEnvironment(readEnvironment, 'LIVEKIT_API_SECRET'),
     liveKitUrl: requiredEnvironment(readEnvironment, 'LIVEKIT_URL'),
     anthropicApiKey: requiredEnvironment(readEnvironment, 'ANTHROPIC_API_KEY'),
+    assemblyAIApiKey: requiredEnvironment(readEnvironment, 'ASSEMBLYAI_API_KEY'),
   }
 }
 
@@ -50,6 +52,7 @@ export function createProductionDependencies(
     },
   })
   const ai = createAnthropicClient(config.anthropicApiKey, fetcher)
+  const assemblyAI = createAssemblyAIClient(config.assemblyAIApiKey, fetcher)
 
   return {
     sessions: {
@@ -68,6 +71,15 @@ export function createProductionDependencies(
           .from('sessions')
           .select('id, code, status')
           .eq('code', code)
+          .maybeSingle()
+        if (error) throw new Error('Unable to find session')
+        return data as SessionRecord | null
+      },
+      async findById(sessionId) {
+        const { data, error } = await database
+          .from('sessions')
+          .select('id, code, status')
+          .eq('id', sessionId)
           .maybeSingle()
         if (error) throw new Error('Unable to find session')
         return data as SessionRecord | null
@@ -100,6 +112,13 @@ export function createProductionDependencies(
           payload: input.payload,
         })
         if (error) throw new Error('Unable to record event')
+        if (input.kind === 'safety.risk') {
+          console.info('[safety-risk]', {
+            session_id: input.sessionId,
+            level: input.payload.level,
+            matched_rules: input.payload.matched_rules,
+          })
+        }
       },
     },
     alerts: {
@@ -144,9 +163,42 @@ export function createProductionDependencies(
         return await token.toJwt()
       },
     },
+    assemblyAI,
     ai,
     publicLiveKitUrl: config.liveKitUrl,
     makeCode: randomSixDigitCode,
+  }
+}
+
+export function createAssemblyAIClient(apiKey: string, fetcher: Fetcher = fetch) {
+  return {
+    async createStreamingToken(input: {
+      expiresInSeconds: number
+      maxSessionDurationSeconds: number
+    }) {
+      const query = new URLSearchParams({
+        expires_in_seconds: String(input.expiresInSeconds),
+        max_session_duration_seconds: String(input.maxSessionDurationSeconds),
+      })
+      const response = await fetcher(`https://streaming.assemblyai.com/v3/token?${query}`, {
+        method: 'GET',
+        headers: { authorization: apiKey },
+      })
+      if (!response.ok) {
+        throw new Error(`Streaming credential provider failed with status ${response.status}`)
+      }
+      const body: unknown = await response.json()
+      if (
+        !isRecord(body) || typeof body.token !== 'string' || body.token.trim().length === 0 ||
+        typeof body.expires_in_seconds !== 'number' || !Number.isFinite(body.expires_in_seconds)
+      ) {
+        throw new Error('Streaming credential provider returned invalid output')
+      }
+      return {
+        token: body.token,
+        expiresInSeconds: body.expires_in_seconds,
+      }
+    },
   }
 }
 

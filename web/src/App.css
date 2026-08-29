@@ -386,6 +386,70 @@
   font-size: 13px;
 }
 
+.safety-risk-card {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 1rem;
+  align-items: center;
+  margin-bottom: 1.25rem;
+  padding: 1.25rem;
+  color: #241000;
+  background: #fff1a8;
+  border: 3px solid #d97706;
+  border-radius: 18px;
+  box-shadow: 0 12px 32px rgba(120, 53, 15, 0.2);
+}
+
+.safety-risk-card.danger {
+  color: #fff;
+  background: #9f1d1d;
+  border-color: #ffcf33;
+}
+
+.safety-risk-card h2,
+.safety-risk-card p {
+  margin: 0.2rem 0;
+}
+
+.safety-risk-card .risk-transcript {
+  margin: 0.55rem 0;
+  font-size: 1.08rem;
+  font-weight: 750;
+}
+
+.safety-risk-icon {
+  display: grid;
+  width: 3rem;
+  height: 3rem;
+  place-items: center;
+  color: #7f1d1d;
+  background: #ffcf33;
+  border-radius: 999px;
+  font-size: 2rem;
+  font-weight: 900;
+}
+
+.safety-risk-card button {
+  padding: 0.7rem 1rem;
+  color: inherit;
+  background: transparent;
+  border: 2px solid currentColor;
+  border-radius: 10px;
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+@media (max-width: 760px) {
+  .safety-risk-card {
+    grid-template-columns: auto 1fr;
+  }
+
+  .safety-risk-card button {
+    grid-column: 1 / -1;
+  }
+}
+
 .session-footer p {
   margin: 0;
 }

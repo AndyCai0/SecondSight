@@ -3,6 +3,22 @@ import Foundation
 import LiveKit
 import SecondSightCore
 
+enum SafetyMonitoringState: Equatable {
+    case off
+    case connecting
+    case listening
+    case disconnected
+
+    var headline: String {
+        switch self {
+        case .off: "Safety Monitoring: OFF"
+        case .connecting: "Safety Monitoring: CONNECTING"
+        case .listening: "Safety Monitoring: ON"
+        case .disconnected: "Safety Monitoring: DISCONNECTED"
+        }
+    }
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     @Published private(set) var phase: SessionPhase = .idle
@@ -11,6 +27,10 @@ final class AppModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var guideStatus = "按住说话，松开后我会给您指路"
     @Published var isGuideRecording = false
+    @Published private(set) var safetyState: SafetyMonitoringState = .off
+    @Published private(set) var safetyStatusMessage = "Start Safety Listening to begin protection."
+    @Published private(set) var livePartialTranscript = ""
+    @Published private(set) var recentTranscriptLines: [String] = []
 
     let permissions = PermissionManager()
 
@@ -23,8 +43,17 @@ final class AppModel: ObservableObject {
     private let overlay = OverlayWindowController()
     private let roomCodeWindow = RoomCodeWindowController()
     private let speech = SpeechSynthesizer()
-    private let referee = RefereeSpeechService()
+    private let safetyStreaming = AssemblyAIStreamingService()
     private let guideSpeech = PushToTalkSpeechService()
+    private let riskPipeline = RiskPipeline()
+    private var riskDeduplicator = RiskEventDeduplicator(cooldown: 8)
+    private var recentTranscript = RecentTranscriptBuffer(window: 25, maximumEntries: 40)
+    private var volunteerAudioTrack: RemoteAudioTrack?
+    private var safetyStartRequested = false
+    private var safetyRequestID: UUID?
+    private var safetyCredentialRequestInFlight = false
+    private var currentSafetyRisk: RiskDetectionResult?
+    private var currentRiskTranscript = ""
 
     init() {
         do { api = EdgeAPIClient(configuration: try AppConfiguration.load()) }
@@ -80,7 +109,6 @@ final class AppModel: ObservableObject {
             errorMessage = "请先点“求助”，等画面准备好后再用 AI 帮我。"
             return
         }
-        referee.pause()
         do {
             try guideSpeech.start { [weak self] result in
                 Task { @MainActor in await self?.guideSpeechCompleted(result) }
@@ -89,7 +117,6 @@ final class AppModel: ObservableObject {
             guideStatus = "我在听，请说您想做什么……"
         } catch {
             errorMessage = error.localizedDescription
-            referee.resume()
         }
     }
 
@@ -98,6 +125,195 @@ final class AppModel: ObservableObject {
         isGuideRecording = false
         guideStatus = "正在看屏幕，马上告诉您下一步……"
         guideSpeech.stop()
+    }
+
+    func toggleSafetyListening() {
+        switch safetyState {
+        case .connecting, .listening:
+            stopSafetyListening()
+        case .off, .disconnected:
+            startSafetyListening()
+        }
+    }
+
+    func dismissSafetyWarning() {
+        overlay.model.dismissSafetyWarning()
+        overlay.setSafetyWarningVisible(false)
+        currentSafetyRisk = nil
+        currentRiskTranscript = ""
+    }
+
+    func pauseForSafetyWarning() {
+        guard currentSafetyRisk != nil else { return }
+        let transcript = currentRiskTranscript
+        dismissSafetyWarning()
+        stopSafetyListening()
+        Task { await freeze(reason: "检测到可能索要敏感信息或要求危险操作", transcript: transcript) }
+    }
+
+    func contactVolunteerAboutRisk() {
+        guard let risk = currentSafetyRisk else { return }
+        let transcript = currentRiskTranscript
+        Task {
+            try? await transport.publish(.safetyRisk(
+                level: risk.level,
+                transcript: transcript,
+                matchedRules: risk.matchedRules
+            ))
+        }
+        statusMessage = "安全提醒已经发送给志愿者"
+        dismissSafetyWarning()
+    }
+
+    private func startSafetyListening() {
+        guard phase == .connected else {
+            errorMessage = "请等志愿者加入后再开始安全监听。"
+            return
+        }
+        guard permissions.statuses[.microphone] == .authorized else {
+            permissions.request(.microphone)
+            errorMessage = "请先允许麦克风权限，再开始安全监听。"
+            return
+        }
+        guard sessionID != nil, api != nil else {
+            errorMessage = "安全监听服务尚未配置。"
+            return
+        }
+
+        safetyStartRequested = true
+        safetyRequestID = UUID()
+        safetyCredentialRequestInFlight = false
+        safetyState = .connecting
+        safetyStatusMessage = volunteerAudioTrack == nil
+            ? "Waiting for volunteer audio…"
+            : "Connecting to live transcription…"
+        livePartialTranscript = ""
+        recentTranscriptLines = []
+        recentTranscript = RecentTranscriptBuffer(window: 25, maximumEntries: 40)
+        riskDeduplicator = RiskEventDeduplicator(cooldown: 8)
+        currentSafetyRisk = nil
+        currentRiskTranscript = ""
+        errorMessage = nil
+
+        if let volunteerAudioTrack {
+            beginSafetyStreaming(track: volunteerAudioTrack)
+        }
+    }
+
+    private func stopSafetyListening() {
+        safetyStartRequested = false
+        safetyRequestID = nil
+        safetyCredentialRequestInFlight = false
+        safetyStreaming.stop()
+        safetyState = .off
+        safetyStatusMessage = "Safety listening is stopped."
+        livePartialTranscript = ""
+        dismissSafetyWarning()
+    }
+
+    private func remoteAudioBecameAvailable(_ track: RemoteAudioTrack) {
+        volunteerAudioTrack = track
+        if safetyStartRequested, safetyState == .connecting {
+            beginSafetyStreaming(track: track)
+        }
+    }
+
+    private func remoteAudioBecameUnavailable() {
+        volunteerAudioTrack = nil
+        safetyMonitoringDisconnected(reason: "Volunteer audio is no longer available.")
+    }
+
+    private func beginSafetyStreaming(track: RemoteAudioTrack) {
+        guard safetyStartRequested, safetyState == .connecting,
+              !safetyCredentialRequestInFlight,
+              let sessionID, let api, let requestID = safetyRequestID
+        else { return }
+        safetyCredentialRequestInFlight = true
+        safetyStatusMessage = "Connecting to live transcription…"
+
+        Task {
+            do {
+                let credential = try await api.createAssemblyAIStreamingCredential(sessionID: sessionID)
+                guard safetyStartRequested, safetyState == .connecting,
+                      safetyRequestID == requestID
+                else { return }
+                safetyCredentialRequestInFlight = false
+                try safetyStreaming.start(track: track, token: credential.token)
+            } catch {
+                guard safetyRequestID == requestID else { return }
+                safetyCredentialRequestInFlight = false
+                safetyMonitoringDisconnected(reason: error.localizedDescription)
+            }
+        }
+    }
+
+    private func safetyMonitoringDisconnected(reason: String) {
+        guard safetyState == .connecting || safetyState == .listening else { return }
+        safetyStartRequested = false
+        safetyRequestID = nil
+        safetyCredentialRequestInFlight = false
+        safetyStreaming.stop()
+        safetyState = .disconnected
+        safetyStatusMessage = "Not protected — \(reason)"
+        livePartialTranscript = ""
+    }
+
+    private func handleSafetyTranscript(_ update: StreamingTranscript) async {
+        guard safetyState == .listening else { return }
+        let now = Date()
+        let context = recentTranscript.transcripts(at: now)
+
+        if update.isFinal {
+            livePartialTranscript = ""
+            recentTranscript.append(update.text, at: now)
+            recentTranscriptLines.append("Volunteer: \(update.text)")
+            if recentTranscriptLines.count > 6 {
+                recentTranscriptLines.removeFirst(recentTranscriptLines.count - 6)
+            }
+        } else {
+            livePartialTranscript = "Volunteer: \(update.text)"
+        }
+
+        let decision = await riskPipeline.analyze(
+            transcript: update.text,
+            recentTranscript: context,
+            currentContext: ["source": "volunteer_live_audio"]
+        )
+        guard decision.level != .safe,
+              riskDeduplicator.shouldEmit(decision, transcript: update.text, at: now),
+              let sessionID, let api
+        else { return }
+
+        currentSafetyRisk = decision
+        currentRiskTranscript = update.text
+        overlay.model.showSafetyWarning(level: decision.level, transcript: update.text)
+        overlay.setSafetyWarningVisible(true)
+        speech.speak("安全提醒。不要告诉任何人验证码、密码或银行卡信息。")
+
+        let message = DataMessage.safetyRisk(
+            level: decision.level,
+            transcript: update.text,
+            matchedRules: decision.matchedRules
+        )
+        let request = RiskEventRequest(
+            sessionID: sessionID,
+            timestamp: ISO8601DateFormatter().string(from: now),
+            level: decision.level,
+            transcript: update.text,
+            matchedRules: decision.matchedRules
+        )
+        Task {
+            do {
+                try await transport.publish(message)
+            } catch {
+                errorMessage = "本机安全提醒仍在工作，但志愿者通知暂时未送达。"
+            }
+            do {
+                _ = try await api.recordRiskEvent(request)
+            } catch {
+                errorMessage = "安全提醒仍在本机工作，但告警记录暂时未送达。"
+            }
+        }
     }
 
     func resumeAfterFalsePositive() {
@@ -129,17 +345,37 @@ final class AppModel: ObservableObject {
         transport.onDataMessage = { [weak self] message in
             Task { @MainActor in self?.handleDataMessage(message) }
         }
-        transport.onRemoteAudioTrack = { [weak referee] track in referee?.attach(to: track) }
+        transport.onRemoteAudioTrack = { [weak self] track in
+            Task { @MainActor in self?.remoteAudioBecameAvailable(track) }
+        }
+        transport.onRemoteAudioTrackUnavailable = { [weak self] in
+            Task { @MainActor in self?.remoteAudioBecameUnavailable() }
+        }
         transport.onError = { [weak self] error in
-            Task { @MainActor in self?.errorMessage = "通话连接有问题：\(error.localizedDescription)" }
+            Task { @MainActor in
+                self?.errorMessage = "通话连接有问题：\(error.localizedDescription)"
+                self?.safetyMonitoringDisconnected(reason: "The call connection was lost.")
+            }
         }
-        referee.onTranscript = { [weak self] transcript in
-            Task { @MainActor in await self?.evaluateVolunteerSpeech(transcript) }
+        safetyStreaming.onConnected = { [weak self] in
+            Task { @MainActor in
+                guard self?.safetyStartRequested == true else { return }
+                self?.safetyState = .listening
+                self?.safetyStatusMessage = "Listening…"
+            }
         }
-        referee.onError = { [weak self] error in
-            Task { @MainActor in self?.errorMessage = error.localizedDescription }
+        safetyStreaming.onTranscript = { [weak self] update in
+            Task { @MainActor in await self?.handleSafetyTranscript(update) }
+        }
+        safetyStreaming.onDisconnected = { [weak self] error in
+            Task { @MainActor in
+                self?.safetyMonitoringDisconnected(reason: error.localizedDescription)
+            }
         }
         overlay.model.onResume = { [weak self] in self?.resumeAfterFalsePositive() }
+        overlay.model.onSafetyPause = { [weak self] in self?.pauseForSafetyWarning() }
+        overlay.model.onSafetyDismiss = { [weak self] in self?.dismissSafetyWarning() }
+        overlay.model.onContactVolunteer = { [weak self] in self?.contactVolunteerAboutRisk() }
     }
 
     private func volunteerJoined(identity: String) {
@@ -163,33 +399,15 @@ final class AppModel: ObservableObject {
             Task { await freeze(reason: reason, transcript: "") }
         case .resume:
             resumeAfterFalsePositive()
-        }
-    }
-
-    private func evaluateVolunteerSpeech(_ transcript: String) async {
-        guard phase == .connected, let sessionID else { return }
-        do {
-            guard let verdict = try await api?.classify(AIRefereeRequest(sessionID: sessionID, transcript: transcript)) else { return }
-            switch verdict.verdict {
-            case .ok: break
-            case .warn:
-                overlay.model.showWarning("安全提醒：\(verdict.reason)")
-                await api?.logEvent(LogEventRequest(sessionID: sessionID, actor: "ai_referee", kind: "warn", payload: ["transcript": .string(transcript), "reason": .string(verdict.reason)]))
-            case .freeze:
-                await freeze(reason: verdict.reason, transcript: transcript)
-            }
-        } catch {
-            if let reason = SensitiveTextPolicy.localFreezeReason(for: transcript) {
-                await freeze(reason: reason, transcript: transcript)
-            } else {
-                errorMessage = "安全检查暂时无法联网；本地敏感词保护仍在运行。"
-            }
+        case .safetyRisk:
+            break
         }
     }
 
     private func freeze(reason: String, transcript: String) async {
         guard phase == .connected else { return }
         do {
+            stopSafetyListening()
             _ = try machine.apply(.freeze)
             phase = machine.phase
             statusMessage = "通话已暂停，请先看屏幕上的安全提醒"
@@ -201,7 +419,7 @@ final class AppModel: ObservableObject {
             if let sessionID {
                 await api?.logEvent(LogEventRequest(
                     sessionID: sessionID,
-                    actor: "ai_referee",
+                    actor: "safety_monitor",
                     kind: "control.freeze",
                     payload: ["reason": .string(reason), "transcript": .string(transcript)]
                 ))
@@ -211,7 +429,6 @@ final class AppModel: ObservableObject {
 
     private func guideSpeechCompleted(_ result: Result<String, Error>) async {
         isGuideRecording = false
-        defer { referee.resume() }
         switch result {
         case let .failure(error):
             errorMessage = "没有听清：\(error.localizedDescription)"
@@ -247,7 +464,7 @@ final class AppModel: ObservableObject {
     }
 
     private func endSessionNow() async {
-        referee.stop()
+        stopSafetyListening()
         await capture.stop()
         await transport.disconnect()
         roomCodeWindow.close()

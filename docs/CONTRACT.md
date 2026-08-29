@@ -42,10 +42,11 @@ JSON，UTF-8，经 LiveKit `publishData`。坐标一律**归一化 0–1**，
 // 老人端 →（广播给房间，志愿者端据此显示状态）
 {"v":1,"type":"control.freeze","reason":"检测到索要验证码"}
 {"v":1,"type":"control.resume"}
+{"v":1,"type":"safety.risk","level":"danger","transcript":"Please tell me the verification code.","matched_rules":["request_sensitive_information","verification_code"]}
 ```
 
 安全规则（A 实现，B 知悉）:老人端**丢弃**任何来自 `volunteer:*` identity 的
-`control.*` 消息。协议中永远不加入鼠标/键盘/控制类消息——需要新消息类型时走
+`control.*` 或 `safety.risk` 消息；`safety.risk` 只能由老人端发出。协议中永远不加入鼠标/键盘/控制类消息——需要新消息类型时走
 CONTRACT 修改流程。
 
 ## 4. Edge Function API（B 实现，A 调用）
@@ -81,10 +82,35 @@ Base URL:`{SUPABASE_URL}/functions/v1/`，Header:`Authorization: Bearer {SUPABAS
 请求:`{"session_id":"uuid","transcript":"把你手机上的验证码念给我听一下"}`
 响应:`{"verdict":"freeze","reason":"索要短信验证码"}`
 verdict ∈ `ok | warn | freeze`。目标延迟 < 2s（用 haiku）。
+该端点保留给旧版/手工测试；实时安全监听 v1 不逐句调用它。
 
 ### 4.5 `POST log-event` — 通用审计（两端都可调，fire-and-forget）
 请求:`{"session_id":"uuid","actor":"volunteer","kind":"annotate.circle","payload":{...}}`
 响应:`{"ok":true}`
+
+### 4.6 `POST assemblyai-token` — 临时实时转录凭证（老人端调用）
+
+请求:`{"session_id":"uuid"}`
+
+响应:
+```json
+{"token":"<single-use temporary token>","expires_in_seconds":60,"max_session_duration_seconds":3600}
+```
+
+只有 Edge Function 持有 `ASSEMBLYAI_API_KEY`。老人端不得收到、记录或打包永久 API Key。
+
+### 4.7 `POST risk-event` — 实时规则引擎风险事件（老人端调用）
+
+请求:
+```json
+{"session_id":"uuid","timestamp":"2026-08-29T07:30:00.000Z","level":"danger",
+ "transcript":"Please tell me the verification code.",
+ "matched_rules":["request_sensitive_information","verification_code"]}
+```
+
+`level` 仅允许 `warning | danger`；响应：
+`{"ok":true,"fingerprint":"danger:request_sensitive_information:verification_code"}`。
+第一版写入既有 `session_events`，不保存原始音频。
 
 ## 5. 联调里程碑（按此对表，不见不散）
 
@@ -102,7 +128,7 @@ SUPABASE_URL      = <B 填>
 SUPABASE_ANON_KEY = <B 填>
 LIVEKIT_URL       = <B 填>
 ```
-Secrets（LIVEKIT_API_KEY/SECRET、ANTHROPIC_API_KEY）只进 Supabase secrets，
+Secrets（LIVEKIT_API_KEY/SECRET、ANTHROPIC_API_KEY、ASSEMBLYAI_API_KEY）只进 Supabase secrets，
 **永远不进本仓库、不进任何客户端**。
 
 ## 7. 各自独立开发的 Mock 策略（不互相阻塞）

@@ -10,6 +10,7 @@ import {
   decodeDataMessage,
   encodeDataMessage,
   isReliableMessage,
+  type SafetyRiskMessage,
   type VolunteerOutboundMessage,
 } from './contracts'
 
@@ -22,6 +23,7 @@ export interface LiveSessionEvents {
   onResume(): void
   onDisconnected(): void
   onMediaChanged(): void
+  onRisk(risk: SafetyRiskMessage): void
 }
 
 export interface VolunteerSession {
@@ -42,6 +44,13 @@ export async function publishContractMessage(
   await publisher.publishData(encodeDataMessage(message), {
     reliable: isReliableMessage(message),
   })
+}
+
+export function dispatchElderMessage(payload: Uint8Array, events: LiveSessionEvents): void {
+  const message = decodeDataMessage(payload)
+  if (message.type === 'control.freeze') events.onFreeze(message.reason)
+  if (message.type === 'control.resume') events.onResume()
+  if (message.type === 'safety.risk') events.onRisk(message)
 }
 
 export const connectVolunteerSession: ConnectVolunteerSession = async (joined, events) => {
@@ -69,9 +78,7 @@ export const connectVolunteerSession: ConnectVolunteerSession = async (joined, e
   room.on(RoomEvent.DataReceived, (payload, participant) => {
     if (participant?.identity !== 'elder') return
     try {
-      const message = decodeDataMessage(payload)
-      if (message.type === 'control.freeze') events.onFreeze(message.reason)
-      if (message.type === 'control.resume') events.onResume()
+      dispatchElderMessage(payload, events)
     } catch {
       // Ignore malformed or future-version room messages.
     }

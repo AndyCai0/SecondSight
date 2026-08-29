@@ -22,14 +22,14 @@ form.addEventListener('submit', (event) => {
 
 async function connect(): Promise<void> {
   button.disabled = true
-  status.textContent = '正在创建并连接…'
+  status.textContent = 'Creating and connecting…'
   let room: Room | null = null
   try {
     let liveKitUrl = manualLiveKitUrl.value.trim()
     let liveKitToken = manualLiveKitToken.value.trim()
     if (!liveKitUrl || !liveKitToken) {
       if (!supabaseUrl.value.trim() || !anonKey.value.trim()) {
-        throw new Error('请填写 Supabase URL 和 public anon key，或同时填写手签 LiveKit URL/token')
+        throw new Error('Enter a Supabase URL and public anon key, or provide both a signed LiveKit URL and token.')
       }
       const api = createSecondSightApi({
         supabaseUrl: supabaseUrl.value.trim(),
@@ -56,7 +56,7 @@ async function connect(): Promise<void> {
       messages.prepend(item)
     })
     room.on(RoomEvent.Disconnected, () => {
-      status.textContent = '已断开'
+      status.textContent = 'Disconnected'
     })
 
     await room.connect(liveKitUrl, liveKitToken)
@@ -65,11 +65,11 @@ async function connect(): Promise<void> {
       contentHint: 'detail',
     })
     publication?.track?.attach(preview)
-    status.textContent = `已连接为 ${room.localParticipant.identity}，正在共享屏幕`
-    button.textContent = '已连接'
+    status.textContent = `Connected as ${room.localParticipant.identity}. Sharing the screen.`
+    button.textContent = 'Connected'
   } catch (error) {
     await room?.disconnect()
-    status.textContent = error instanceof Error ? error.message : '连接失败'
+    status.textContent = error instanceof Error ? error.message : 'Connection failed'
     button.disabled = false
   }
 }

@@ -38,27 +38,27 @@ describe('volunteer app', () => {
     const user = userEvent.setup()
 
     render(<App api={api} connectSession={connectSession} />)
-    expect(screen.getByText('你只能看和指，操作永远由长辈本人完成')).toBeInTheDocument()
-    await user.type(screen.getByLabelText('6 位房间码'), '482913')
-    await user.type(screen.getByLabelText('你的昵称'), '小王')
-    await user.click(screen.getByRole('button', { name: '进入协助房间' }))
+    expect(screen.getByText('You can only watch and guide. The elder stays in control.')).toBeInTheDocument()
+    await user.type(screen.getByLabelText('6-digit room code'), '482913')
+    await user.type(screen.getByLabelText('Your display name'), 'Alex')
+    await user.click(screen.getByRole('button', { name: 'Join Assistance Session' }))
 
-    expect(await screen.findByText('正在协助')).toBeInTheDocument()
-    expect(api.joinSession).toHaveBeenCalledWith({ code: '482913', name: '小王' })
-    expect(screen.getByRole('link', { name: '查看安全告警记录' })).toHaveAttribute(
+    expect(await screen.findByText('Assistance in Progress')).toBeInTheDocument()
+    expect(api.joinSession).toHaveBeenCalledWith({ code: '482913', name: 'Alex' })
+    expect(screen.getByRole('link', { name: 'View Safety Alerts' })).toHaveAttribute(
       'href',
       '/alerts.html?session_id=session-1',
     )
-    expect(screen.getByLabelText('长辈摄像头画面')).toBeInTheDocument()
+    expect(screen.getByLabelText('Elder camera video')).toBeInTheDocument()
     expect(session.attachMedia).toHaveBeenCalledWith(
       expect.any(HTMLVideoElement),
       expect.any(HTMLVideoElement),
       expect.any(HTMLAudioElement),
     )
 
-    act(() => events?.onFreeze('检测到索要验证码'))
-    expect(screen.getByRole('alertdialog')).toHaveTextContent('会话已被 AI 安全助手暂停')
-    expect(screen.getByRole('alertdialog')).toHaveTextContent('检测到索要验证码')
+    act(() => events?.onFreeze('A request for a verification code was detected.'))
+    expect(screen.getByRole('alert')).toHaveTextContent('The AI safety monitor paused this session')
+    expect(screen.getByRole('alert')).toHaveTextContent('A request for a verification code was detected.')
 
     act(() => events?.onResume())
     act(() => events?.onRisk({
@@ -69,9 +69,9 @@ describe('volunteer app', () => {
       transcript_truncated: true,
       matched_rules: ['request_sensitive_information', 'verification_code'],
     }))
-    expect(screen.getByRole('alert')).toHaveTextContent('长辈端检测到危险话术')
+    expect(screen.getByRole('alert')).toHaveTextContent('Potentially dangerous language detected')
     expect(screen.getByRole('alert')).toHaveTextContent('Please tell me the verification code.')
-    expect(screen.getByRole('alert')).toHaveTextContent('字幕过长')
+    expect(screen.getByRole('alert')).toHaveTextContent('The transcript was shortened to the first 1,000 characters.')
   })
 
   it('shows the elder camera separately without replacing the annotated screen', async () => {
@@ -104,30 +104,30 @@ describe('volunteer app', () => {
     const user = userEvent.setup()
 
     const view = render(<App api={api} connectSession={connectSession} />)
-    await user.type(screen.getByLabelText('6 位房间码'), '482913')
-    await user.type(screen.getByLabelText('你的昵称'), '小王')
-    await user.click(screen.getByRole('button', { name: '进入协助房间' }))
+    await user.type(screen.getByLabelText('6-digit room code'), '482913')
+    await user.type(screen.getByLabelText('Your display name'), 'Alex')
+    await user.click(screen.getByRole('button', { name: 'Join Assistance Session' }))
 
     const app = within(view.container)
-    const sharedScreen = await app.findByLabelText('长辈共享的屏幕')
-    const elderCamera = app.getByLabelText('长辈摄像头画面')
+    const sharedScreen = await app.findByLabelText("Elder's shared screen")
+    const elderCamera = app.getByLabelText('Elder camera video')
     expect(session.attachMedia).toHaveBeenCalledWith(
       sharedScreen,
       elderCamera,
       expect.any(HTMLAudioElement),
     )
-    expect(app.getByText('等待长辈分享电脑画面…')).toBeInTheDocument()
-    expect(app.getByText('等待长辈开启摄像头…')).toBeInTheDocument()
+    expect(app.getByText('Waiting for the elder to share their screen…')).toBeInTheDocument()
+    expect(app.getByText('Waiting for the elder to turn on their camera…')).toBeInTheDocument()
 
     act(() => events?.onMediaChanged('camera', true))
-    expect(app.queryByText('等待长辈开启摄像头…')).not.toBeInTheDocument()
-    expect(app.getByText('等待长辈分享电脑画面…')).toBeInTheDocument()
+    expect(app.queryByText('Waiting for the elder to turn on their camera…')).not.toBeInTheDocument()
+    expect(app.getByText('Waiting for the elder to share their screen…')).toBeInTheDocument()
 
     act(() => events?.onMediaChanged('screen', true))
-    expect(app.queryByText('等待长辈分享电脑画面…')).not.toBeInTheDocument()
+    expect(app.queryByText('Waiting for the elder to share their screen…')).not.toBeInTheDocument()
 
     act(() => events?.onMediaChanged('camera', false))
-    expect(app.getByText('等待长辈开启摄像头…')).toBeInTheDocument()
+    expect(app.getByText('Waiting for the elder to turn on their camera…')).toBeInTheDocument()
   })
 
   it('reports presence, shows the receiving state, and claims an elder broadcast', async () => {
@@ -143,7 +143,7 @@ describe('volunteer app', () => {
       pollBroadcasts: vi.fn(async () => [{
         sessionId: '9d1d5434-6da5-41e0-af70-c5aa35c6816f',
         requestedAt: '2026-08-29T10:00:00.000Z',
-        elderLabel: '李奶奶',
+        elderLabel: 'Margaret',
       }]),
       claimBroadcast: vi.fn(async () => ({
         sessionId: '9d1d5434-6da5-41e0-af70-c5aa35c6816f',
@@ -161,22 +161,22 @@ describe('volunteer app', () => {
 
     render(<App api={api} connectSession={connectSession} />)
 
-    expect(await screen.findByText('正在接收广播')).toBeInTheDocument()
-    expect(await screen.findByText('李奶奶正在等待帮助')).toBeInTheDocument()
+    expect(await screen.findByText('Listening for help requests')).toBeInTheDocument()
+    expect(await screen.findByText('Margaret is waiting for help')).toBeInTheDocument()
     expect(api.pollBroadcasts).toHaveBeenCalledWith({
       assistantId: expect.any(String),
-      name: '待命助手',
+      name: 'Available Volunteer',
     })
 
-    await user.type(screen.getByLabelText('你的昵称'), '小王')
-    await user.click(screen.getByRole('button', { name: '响应求助' }))
+    await user.type(screen.getByLabelText('Your display name'), 'Alex')
+    await user.click(screen.getByRole('button', { name: 'Respond' }))
 
-    expect(await screen.findByText('正在协助')).toBeInTheDocument()
-    expect(screen.getByText('在线求助已接通')).toBeInTheDocument()
+    expect(await screen.findByText('Assistance in Progress')).toBeInTheDocument()
+    expect(screen.getByText('Live help request')).toBeInTheDocument()
     expect(api.claimBroadcast).toHaveBeenCalledWith({
       sessionId: '9d1d5434-6da5-41e0-af70-c5aa35c6816f',
       assistantId: expect.any(String),
-      name: '小王',
+      name: 'Alex',
     })
     expect(connectSession).toHaveBeenCalledWith(
       expect.objectContaining({ liveKitToken: 'claimed-volunteer-jwt' }),

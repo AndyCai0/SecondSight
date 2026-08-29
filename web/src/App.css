@@ -741,6 +741,15 @@
 }
 
 @media (max-width: 760px) {
+  .annotation-toolbar {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .annotation-toolbar button {
+    min-width: 0;
+  }
+
   .safety-risk-card {
     grid-template-columns: auto 1fr;
   }

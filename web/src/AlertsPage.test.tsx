@@ -13,8 +13,8 @@ describe('alerts traceability page', () => {
         id: 12,
         timestamp: '2026-08-29T06:30:00.000Z',
         severity: 'freeze' as const,
-        transcript: '把验证码念给我',
-        reason: '索要短信验证码',
+        transcript: 'Please tell me the verification code.',
+        reason: 'Verification code requested',
       }]),
       pollBroadcasts: vi.fn(async () => []),
       claimBroadcast: vi.fn(async () => {
@@ -24,9 +24,11 @@ describe('alerts traceability page', () => {
 
     render(<AlertsPage api={api} sessionId="session-2" />)
 
-    expect(screen.getByRole('heading', { name: '安全告警记录' })).toBeInTheDocument()
-    expect(await screen.findByText('索要短信验证码')).toBeInTheDocument()
-    expect(screen.getByText('把验证码念给我')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Safety Alert History' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Back to Volunteer Console' })).toBeInTheDocument()
+    expect(await screen.findByText('Verification code requested')).toBeInTheDocument()
+    expect(screen.getByText('Please tell me the verification code.')).toBeInTheDocument()
+    expect(screen.getByText('Session Paused')).toBeInTheDocument()
     expect(api.listAlerts).toHaveBeenCalledWith('session-2')
   })
 })

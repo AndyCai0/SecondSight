@@ -2,7 +2,7 @@ import { strict as assert } from 'node:assert'
 
 Deno.test('initial migration creates the contract tables with deny-by-default RLS', async () => {
   const sql = await Deno.readTextFile(
-    new URL('../migrations/202608290001_initial.sql', import.meta.url),
+    new URL('../migrations/20260829084019_initial.sql', import.meta.url),
   )
 
   for (const table of ['sessions', 'session_events', 'alerts']) {
@@ -32,7 +32,7 @@ Deno.test('server access migration grants only the backend role', async () => {
 
 Deno.test('automatic RLS helper is not exposed through the Data API', async () => {
   const sql = await Deno.readTextFile(
-    new URL('../migrations/20260829084356_secure_auto_rls_trigger.sql', import.meta.url),
+    new URL('../migrations/20260829084447_secure_auto_rls_trigger.sql', import.meta.url),
   )
 
   assert.match(

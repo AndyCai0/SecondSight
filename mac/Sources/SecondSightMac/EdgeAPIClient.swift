@@ -1,0 +1,69 @@
+import Foundation
+import SecondSightCore
+
+final class EdgeAPIClient: @unchecked Sendable {
+    enum ClientError: LocalizedError {
+        case invalidResponse
+        case server(status: Int, message: String)
+
+        var errorDescription: String? {
+            switch self {
+            case .invalidResponse: "服务器返回了无法识别的数据。"
+            case let .server(status, message): "服务器错误（\(status)）：\(message)"
+            }
+        }
+    }
+
+    private let configuration: AppConfiguration
+    private let session: URLSession
+    private let encoder = JSONEncoder()
+    private let decoder = JSONDecoder()
+
+    init(configuration: AppConfiguration, session: URLSession = .shared) {
+        self.configuration = configuration
+        self.session = session
+    }
+
+    func createSession() async throws -> CreateSessionResponse {
+        try await post(path: "create-session", body: EmptyRequest(), response: CreateSessionResponse.self)
+    }
+
+    func requestGuide(_ request: AIGuideRequest) async throws -> AIGuideResponse {
+        try await post(path: "ai-guide", body: request, response: AIGuideResponse.self)
+    }
+
+    func classify(_ request: AIRefereeRequest) async throws -> AIRefereeResponse {
+        try await post(path: "ai-referee", body: request, response: AIRefereeResponse.self)
+    }
+
+    func logEvent(_ request: LogEventRequest) async {
+        _ = try? await post(path: "log-event", body: request, response: LogEventResponse.self)
+    }
+
+    private func post<Body: Encodable, Response: Decodable>(path: String, body: Body, response: Response.Type) async throws -> Response {
+        var url = configuration.supabaseURL
+        url.append(path: "functions")
+        url.append(path: "v1")
+        url.append(path: path)
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(configuration.supabaseAnonKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try encoder.encode(body)
+        request.timeoutInterval = 15
+
+        let (data, urlResponse) = try await session.data(for: request)
+        guard let http = urlResponse as? HTTPURLResponse else { throw ClientError.invalidResponse }
+        guard (200 ..< 300).contains(http.statusCode) else {
+            let message = (try? decoder.decode(APIErrorResponse.self, from: data).error)
+                ?? String(data: data, encoding: .utf8)
+                ?? "未知错误"
+            throw ClientError.server(status: http.statusCode, message: message)
+        }
+        do { return try decoder.decode(Response.self, from: data) }
+        catch { throw ClientError.invalidResponse }
+    }
+}
+
+private struct EmptyRequest: Encodable {}
+private struct LogEventResponse: Decodable { let ok: Bool }

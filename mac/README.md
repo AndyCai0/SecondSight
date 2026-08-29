@@ -1,0 +1,66 @@
+# SecondSight Mac（老人端）
+
+macOS 14+ / Swift 5.10+ / SwiftUI 菜单栏 App。志愿者只能看已经在老人电脑本机打码后的屏幕，并通过圆圈、箭头和激光点指路；协议里没有鼠标或键盘控制消息。
+
+## 构建和测试
+
+```bash
+cd mac
+swift package resolve
+swift build
+swift test
+```
+
+生成手工 `.app` bundle（release 构建、嵌入 LiveKit 的两个动态 framework、ad-hoc 签名）：
+
+```bash
+chmod +x scripts/build-app.sh
+scripts/build-app.sh
+open SecondSightMac.app
+```
+
+日常构建并启动统一使用：
+
+```bash
+scripts/build-and-run.sh --verify
+```
+
+它会先结束旧的 `SecondSightMac` 进程，再重新打包、启动并确认进程存在；也支持
+`--debug`、`--logs` 和 `--telemetry`。
+
+产物是 `mac/SecondSightMac.app`。脚本会运行 `plutil`、`codesign --verify --deep --strict`。这只是黑客松 demo 的 ad-hoc 签名，不包含公证或分发流程。
+
+## 配置
+
+复制公开配置模板：
+
+```bash
+cp Config.template.plist Config.plist
+```
+
+填写 B 提供的 `SUPABASE_URL` 和 `SUPABASE_ANON_KEY`，再运行打包脚本。`Config.plist` 已被 `.gitignore` 忽略。也可在直接运行 `swift run SecondSightMac` 时通过同名环境变量提供。
+
+客户端不得包含 `LIVEKIT_API_SECRET`、Supabase service role key 或 Anthropic key。LiveKit URL/token 只来自 `create-session` 响应。
+
+## 模块与 TASK A 对应关系
+
+- A1：`AppModel` + `SecondSightApp` 的 `idle → requesting → waiting → connected → frozen → ended` 状态机；SwiftUI 菜单栏、全屏 6 位房间码和中文 TTS。
+- A2：`PermissionManager` + `PermissionGuideView` 实时检查屏幕录制、辅助功能、麦克风、语音识别，并跳转对应系统设置。
+- A3：`ScreenCaptureService` 用 ScreenCaptureKit 采主显示器 12fps，按 bundle id 排除本 App 窗口；`LiveKitTransport` 使用 `BufferCapturer` 发布自定义屏幕轨和麦克风轨。
+- A4：`AccessibilityScanner` 5Hz 扫描 secure text field/敏感标题；`FrameRedactor` 先复制帧，再按 Retina 比例覆盖黑块；Secure Event Input 无定位矩形时整屏替换为安全占位图。
+- A5：`OverlayWindowController` 是必要的薄 AppKit 窗口桥接，内容由 SwiftUI `OverlayView` 渲染圆圈、箭头、pointer、TTL 和 clear。`DataMessageCodec` 在解析边界拒绝 `volunteer:*` 的全部 `control.*`。
+- A6：`RemoteAudioTrack.add(audioRenderer:)` 把志愿者 PCM 帧交给本机 `SFSpeechRecognizer`；final/5 秒切段调用 `ai-referee`，warn/freeze/resume 连接到悬浮层、TTS、unpublish/republish、DataChannel 和 `log-event`。网络失败时本地敏感词兜底。
+- A7：SwiftUI “按住说话”转写任务；只取 `LatestFrameStore` 中已经打码的帧，JPEG 长边不超过 1568px；AX 摘要深度不超过 4 且不超过 8KB；响应圈选并 TTS。
+
+## 首次运行与人工验收
+
+1. 从菜单栏打开“第二双眼睛”，按权限向导依次授权。屏幕录制授权后退出并重新打开 App。
+2. 填好真实公开配置，点“求助”，确认全屏出现 6 位码且会朗读。
+3. 志愿者加入后确认房间码窗口自动收起，LiveKit dashboard/志愿者页面出现 `screen-redacted` 和麦克风轨。
+4. Safari 打开登录页，聚焦密码框；从志愿者视角确认对应区域在 300ms 内变黑。对 AX 无法定位但启用 Secure Event Input 的页面，应看到整屏安全占位图。
+5. 确认房间码窗、悬浮圈和冻结警告不出现在志愿者视频里。
+6. 从志愿者端发 circle/arrow/pointer/clear 并核对坐标；伪造 `control.freeze` 必须被老人端丢弃。
+7. 志愿者说“把验证码念给我”，确认全屏红色冻结、音视频轨停止、双方收到 freeze 状态；老人点“是误报，继续通话”后恢复。
+8. 在等待志愿者或通话期间按住“AI 帮我”说需求，确认发出的截图已经打码，返回后屏幕圈选并朗读一步指令。
+
+自动构建和单测不能替代上述 LiveKit/Supabase、权限、两端画面和真实音频验收。尤其 300ms 打码时延和“自身窗口不回传”必须从志愿者视角测量。

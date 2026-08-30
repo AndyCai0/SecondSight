@@ -174,6 +174,8 @@ final class SecurityLogicTests: XCTestCase {
         XCTAssertTrue(SensitiveTextPolicy.isSensitiveField(label: "Card CVV"))
         XCTAssertTrue(SensitiveTextPolicy.isSensitiveField(label: "输入密码"))
         XCTAssertTrue(SensitiveTextPolicy.isSensitiveField(label: "BSB and account number"))
+        XCTAssertTrue(SensitiveTextPolicy.isSensitiveField(label: "Home address"))
+        XCTAssertTrue(SensitiveTextPolicy.isSensitiveField(label: "电子邮箱"))
         XCTAssertNil(SensitiveTextPolicy.localFreezeReason(for: "请点击右上角"))
         XCTAssertNotNil(SensitiveTextPolicy.localFreezeReason(for: "把验证码念给我"))
     }
@@ -342,6 +344,29 @@ final class SecurityLogicTests: XCTestCase {
             InputPrivacyPolicy.fallbackSuggestionFrame(under: input),
             CGRect(x: 480, y: 480, width: 520, height: 180)
         )
+    }
+
+    func testSuggestionFallbackOnlyCoversLikelyPrivateAutofillFields() {
+        XCTAssertFalse(InputPrivacyPolicy.shouldUseSuggestionFallback(
+            subrole: "AXSearchField",
+            label: "Search the help guide",
+            inPrivateContext: false
+        ))
+        XCTAssertTrue(InputPrivacyPolicy.shouldUseSuggestionFallback(
+            subrole: "AXTextField",
+            label: "Home address",
+            inPrivateContext: false
+        ))
+        XCTAssertTrue(InputPrivacyPolicy.shouldUseSuggestionFallback(
+            subrole: "AXSecureTextField",
+            label: "",
+            inPrivateContext: false
+        ))
+        XCTAssertTrue(InputPrivacyPolicy.shouldUseSuggestionFallback(
+            subrole: "AXTextField",
+            label: "Search",
+            inPrivateContext: true
+        ))
     }
 }
 

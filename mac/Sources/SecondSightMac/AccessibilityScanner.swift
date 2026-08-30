@@ -129,6 +129,11 @@ final class AccessibilityScanner: @unchecked Sendable {
         let visibleRegions: [CGRect]
     }
 
+    private struct FocusedInput {
+        let frame: CGRect
+        let needsSuggestionFallback: Bool
+    }
+
     private func scan() {
         let secureInput = IsSecureEventInputEnabled()
         let isTrusted = AXIsProcessTrusted()
@@ -151,7 +156,7 @@ final class AccessibilityScanner: @unchecked Sendable {
         let deadline = DispatchTime.now().uptimeNanoseconds + Self.maximumScanDurationNanoseconds
         var rects: [CGRect] = []
         var suggestionSurfaceRects: [CGRect] = []
-        var focusedInputFrame: CGRect?
+        var focusedInput: FocusedInput?
         var summaryNodes: [SummaryNode] = []
         var unframedSensitiveContent = false
         var unavailableWindow = false
@@ -207,7 +212,7 @@ final class AccessibilityScanner: @unchecked Sendable {
                     seen: &seen,
                     rects: &rects,
                     suggestionSurfaceRects: &suggestionSurfaceRects,
-                    focusedInputFrame: &focusedInputFrame,
+                    focusedInput: &focusedInput,
                     unframedSensitiveContent: &unframedSensitiveContent,
                     summary: &summaryNodes
                 )
@@ -215,14 +220,14 @@ final class AccessibilityScanner: @unchecked Sendable {
             }
         }
 
-        if let focusedInputFrame {
+        if let focusedInput {
             let nearbySuggestionSurfaces = suggestionSurfaceRects.filter {
-                InputPrivacyPolicy.shouldRedactSuggestionSurface($0, near: focusedInputFrame)
+                InputPrivacyPolicy.shouldRedactSuggestionSurface($0, near: focusedInput.frame)
             }
-            if nearbySuggestionSurfaces.isEmpty {
-                rects.append(InputPrivacyPolicy.fallbackSuggestionFrame(under: focusedInputFrame))
-            } else {
+            if !nearbySuggestionSurfaces.isEmpty {
                 rects.append(contentsOf: nearbySuggestionSurfaces)
+            } else if focusedInput.needsSuggestionFallback {
+                rects.append(InputPrivacyPolicy.fallbackSuggestionFrame(under: focusedInput.frame))
             }
         }
 
@@ -260,7 +265,7 @@ final class AccessibilityScanner: @unchecked Sendable {
         seen: inout [CFHashCode: [AXUIElement]],
         rects: inout [CGRect],
         suggestionSurfaceRects: inout [CGRect],
-        focusedInputFrame: inout CGRect?,
+        focusedInput: inout FocusedInput?,
         unframedSensitiveContent: inout Bool,
         summary: inout [SummaryNode]
     ) {
@@ -322,7 +327,14 @@ final class AccessibilityScanner: @unchecked Sendable {
             }
         }
         if isEditable, isFocused, let frame {
-            focusedInputFrame = frame
+            focusedInput = FocusedInput(
+                frame: frame,
+                needsSuggestionFallback: InputPrivacyPolicy.shouldUseSuggestionFallback(
+                    subrole: subrole,
+                    label: label,
+                    inPrivateContext: privateContext
+                )
+            )
         }
         if InputPrivacyPolicy.isSuggestionSurface(role: role), let frame {
             suggestionSurfaceRects.append(frame)
@@ -355,7 +367,7 @@ final class AccessibilityScanner: @unchecked Sendable {
                 seen: &seen,
                 rects: &rects,
                 suggestionSurfaceRects: &suggestionSurfaceRects,
-                focusedInputFrame: &focusedInputFrame,
+                focusedInput: &focusedInput,
                 unframedSensitiveContent: &unframedSensitiveContent,
                 summary: &summary
             )

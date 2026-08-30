@@ -39,8 +39,9 @@ npm run build
 - During `npm run dev`, `/test-fixtures/privacy-fixture.html` contains invented email, banking,
   identity, health, contact, input, message, calendar, address-suggestion, Canvas/PDF-style, face,
   and QR examples for two-display privacy verification. It contains no real user data. Append
-  `?focus-input=1` to expose the synthetic suggestion surface or `?private-window=1` to exercise a
-  Gmail/messages/calendar window-title context.
+  `?focus-input=1` to expose the synthetic suggestion surface, `?focus-ordinary=1` to verify that a
+  plain search field does not create a fallback mask over unrelated content, or
+  `?private-window=1` to exercise a Gmail/messages/calendar window-title context.
 
 For localhost-only media testing, append `?test_synthetic_media=1` to use generated silent camera
 and microphone tracks without occupying physical devices. `?test_secondary_camera=1` selects the

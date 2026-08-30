@@ -5,7 +5,10 @@ public enum SensitiveTextPolicy {
     public static let fieldKeywords = [
         "password", "passcode", "pin", "one-time code", "verification code", "security code",
         "card", "cvv", "cvc", "account number", "routing number", "bsb",
-        "密码", "口令", "验证码", "安全码", "银行卡", "卡号", "账户", "账号",
+        "name", "username", "email", "phone", "mobile", "address", "date of birth", "dob",
+        "postal code", "postcode",
+        "密码", "口令", "验证码", "安全码", "银行卡", "卡号", "账户", "账号", "姓名",
+        "用户名", "邮箱", "电话", "手机", "地址", "出生日期", "邮编",
     ]
     public static let freezeKeywords = ["验证码", "密码", "转账", "汇款", "礼品卡"]
 
@@ -254,6 +257,20 @@ public enum InputPrivacyPolicy {
 
     public static func isSuggestionSurface(role: String) -> Bool {
         suggestionSurfaceRoles.contains(role)
+    }
+
+    /// Some password managers and browser autofill panels do not expose a
+    /// separate AX surface. Keep a small fallback only for fields whose label
+    /// or context can actually contain personal/credential autofill. A plain
+    /// search or tutorial field must not black out unrelated content below it.
+    public static func shouldUseSuggestionFallback(
+        subrole: String,
+        label: String,
+        inPrivateContext: Bool
+    ) -> Bool {
+        inPrivateContext
+            || subrole == "AXSecureTextField"
+            || SensitiveTextPolicy.isSensitiveField(label: label)
     }
 
     public static func shouldRedactSuggestionSurface(

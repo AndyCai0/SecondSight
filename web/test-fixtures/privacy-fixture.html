@@ -62,6 +62,7 @@
       <article>
         <h2>Ordinary controls should remain visible</h2>
         <p class="ordinary">Click the blue Continue button to proceed with the tutorial.</p>
+        <label>Ordinary tutorial search <input id="ordinary-search" value="" placeholder="Search the help guide" /></label>
         <button type="button">Continue</button>
       </article>
       <article>
@@ -98,7 +99,9 @@
       if (search.has("private-window")) {
         document.title = "Inbox - Gmail | Synthetic Messages and Calendar";
       }
-      if (search.has("focus-input")) {
+      if (search.has("focus-ordinary")) {
+        document.querySelector("#ordinary-search")?.focus();
+      } else if (search.has("focus-input")) {
         document.querySelector("#autofill-target")?.focus();
       }
 

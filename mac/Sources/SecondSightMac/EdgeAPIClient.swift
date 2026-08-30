@@ -48,12 +48,28 @@ final class EdgeAPIClient: @unchecked Sendable {
         return response
     }
 
-    func requestGuide(_ request: AIGuideRequest) async throws -> AIGuideResponse {
-        try await post(path: "ai-guide", body: request, response: AIGuideResponse.self)
+    func requestGuide(
+        _ request: AIGuideRequest,
+        elderCredential: String
+    ) async throws -> AIGuideResponse {
+        try await post(
+            path: "ai-guide",
+            body: request,
+            response: AIGuideResponse.self,
+            additionalHeaders: ["x-secondsight-elder-token": elderCredential]
+        )
     }
 
-    func classify(_ request: AIRefereeRequest) async throws -> AIRefereeResponse {
-        try await post(path: "ai-referee", body: request, response: AIRefereeResponse.self)
+    func analyzeSafety(
+        _ request: AISafetyAnalysisRequest,
+        elderCredential: String
+    ) async throws -> AISafetyAnalysisResponse {
+        try await post(
+            path: "ai-referee",
+            body: request,
+            response: AISafetyAnalysisResponse.self,
+            additionalHeaders: ["x-secondsight-elder-token": elderCredential]
+        )
     }
 
     func createAssemblyAIStreamingCredential(

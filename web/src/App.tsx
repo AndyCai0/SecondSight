@@ -14,7 +14,11 @@ import {
   type JoinedSession,
   type SecondSightApi,
 } from './api'
-import type { SafetyRiskMessage, VolunteerOutboundMessage } from './contracts'
+import type {
+  CaptionTranscriptMessage,
+  SafetyRiskMessage,
+  VolunteerOutboundMessage,
+} from './contracts'
 import {
   acquireVolunteerMedia,
   connectVolunteerSession,
@@ -41,6 +45,10 @@ interface AppProps {
   connectSession?: ConnectVolunteerSession
 }
 
+interface CaptionDisplay extends CaptionTranscriptMessage {
+  receivedOrder: number
+}
+
 function App({
   api,
   acquireMedia = acquireVolunteerMedia,
@@ -65,6 +73,7 @@ function App({
   const [hasCameraMedia, setHasCameraMedia] = useState(false)
   const [auditFailed, setAuditFailed] = useState(false)
   const [safetyRisk, setSafetyRisk] = useState<SafetyRiskMessage | null>(null)
+  const [captions, setCaptions] = useState<CaptionDisplay[]>([])
   const [broadcasts, setBroadcasts] = useState<HelpBroadcast[]>([])
   const [receiverStatus, setReceiverStatus] = useState<ReceiverStatus>(
     broadcastConfigured ? 'connecting' : 'unavailable',
@@ -78,6 +87,7 @@ function App({
   const manualDisconnect = useRef(false)
   const entryInFlight = useRef(false)
   const nameRef = useRef(name)
+  const captionOrder = useRef(0)
   const assistantId = useMemo(() => resolveAssistantId(), [])
 
   useEffect(() => {
@@ -158,6 +168,7 @@ function App({
     setHasCameraMedia(false)
     setAuditFailed(false)
     setSafetyRisk(null)
+    setCaptions([])
     manualDisconnect.current = false
     let media: PreparedVolunteerMedia | null = null
     try {
@@ -189,6 +200,7 @@ function App({
     setHasCameraMedia(false)
     setAuditFailed(false)
     setSafetyRisk(null)
+    setCaptions([])
     manualDisconnect.current = false
     let media: PreparedVolunteerMedia | null = null
     try {
@@ -222,6 +234,7 @@ function App({
         if (manualDisconnect.current) return
         currentSession.current = null
         setActive(null)
+        setCaptions([])
         setError(t('connectionInterrupted'))
       },
       onMediaChanged: (kind, isAvailable) => {
@@ -229,6 +242,7 @@ function App({
         if (kind === 'camera') setHasCameraMedia(isAvailable)
       },
       onRisk: setSafetyRisk,
+      onCaption: handleCaption,
     }, media)
     currentSession.current = live
     setActive({ joined, live, context, volunteerName })
@@ -249,6 +263,7 @@ function App({
       setHasScreenMedia(false)
       setHasCameraMedia(false)
       setSafetyRisk(null)
+      setCaptions([])
     }
     if (disconnectFailed) {
       setError(t('disconnectUnclean'))
@@ -263,6 +278,23 @@ function App({
       kind: message.type,
       payload: message as unknown as Record<string, unknown>,
     }).catch(() => setAuditFailed(true))
+  }
+
+  function handleCaption(caption: CaptionTranscriptMessage): void {
+    setCaptions((current) => {
+      const index = current.findIndex((item) =>
+        item.speaker === caption.speaker && item.turn_order === caption.turn_order
+      )
+      const receivedOrder = index >= 0
+        ? current[index].receivedOrder
+        : captionOrder.current++
+      const next = index >= 0
+        ? current.map((item, itemIndex) =>
+          itemIndex === index ? { ...caption, receivedOrder } : item
+        )
+        : [...current, { ...caption, receivedOrder }]
+      return next.sort((a, b) => a.receivedOrder - b.receivedOrder).slice(-10)
+    })
   }
 
   return (
@@ -425,6 +457,32 @@ function App({
             </section>
           )}
 
+          <section className="live-transcript-card" aria-labelledby="live-transcript-title">
+            <div className="live-transcript-heading">
+              <div>
+                <p className="eyebrow">{t('liveTranscriptKicker')}</p>
+                <h2 id="live-transcript-title">{t('liveTranscript')}</h2>
+              </div>
+              <span aria-live="polite">{captions.length > 0 ? t('transcribing') : t('waitingForSpeech')}</span>
+            </div>
+            {captions.length === 0 ? (
+              <p className="transcript-empty">{t('transcriptWaiting')}</p>
+            ) : (
+              <ol className="transcript-lines" aria-live="polite">
+                {captions.map((caption) => (
+                  <li
+                    key={`${caption.speaker}:${caption.turn_order}`}
+                    className={caption.is_final ? '' : 'partial'}
+                  >
+                    <strong>{t(caption.speaker === 'elder' ? 'elderSpeaker' : 'volunteerSpeaker')}</strong>
+                    <span>{caption.text}</span>
+                    {!caption.is_final && <small>{t('partialCaption')}</small>}
+                  </li>
+                ))}
+              </ol>
+            )}
+          </section>
+
           <div className="session-media-grid">
             <AnnotationSurface
               videoRef={videoRef}
@@ -500,6 +558,9 @@ function joinFailureMessage(cause: unknown, t: Translator): string {
   }
   if (cause instanceof DOMException && cause.name === 'NotAllowedError') {
     return t('mediaRequired')
+  }
+  if (cause instanceof Error && cause.message === 'Camera and microphone access timed out') {
+    return t('mediaUnavailable')
   }
   return t('joinFailed')
 }

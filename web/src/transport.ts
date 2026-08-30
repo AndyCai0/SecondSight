@@ -1,5 +1,9 @@
 import {
   createLocalTracks,
+  getEmptyAudioStreamTrack,
+  getEmptyVideoStreamTrack,
+  LocalAudioTrack,
+  LocalVideoTrack,
   Room,
   RoomEvent,
   Track,
@@ -12,6 +16,7 @@ import {
   decodeDataMessage,
   encodeDataMessage,
   isReliableMessage,
+  type CaptionTranscriptMessage,
   type SafetyRiskMessage,
   type VolunteerOutboundMessage,
 } from './contracts'
@@ -26,6 +31,7 @@ export interface LiveSessionEvents {
   onDisconnected(): void
   onMediaChanged(kind: ElderVideoKind, isAvailable: boolean): void
   onRisk(risk: SafetyRiskMessage): void
+  onCaption(caption: CaptionTranscriptMessage): void
 }
 
 export interface VolunteerSession {
@@ -55,8 +61,87 @@ export type ConnectVolunteerSession = (
 
 export type ElderVideoKind = 'screen' | 'camera'
 
+const volunteerMediaAcquisitionTimeoutMilliseconds = 15_000
+
+type DeviceCaptureOption = true | { deviceId: { exact: string } }
+
+export function isLoopbackMediaTestHost(hostname: string): boolean {
+  return hostname === '127.0.0.1' || hostname === 'localhost' || hostname === '[::1]'
+}
+
+async function volunteerCaptureOptions(): Promise<{
+  audio: DeviceCaptureOption
+  video: DeviceCaptureOption
+}> {
+  const useSecondaryCamera = isLoopbackMediaTestHost(window.location.hostname)
+    && new URLSearchParams(window.location.search).get('test_secondary_camera') === '1'
+  if (!useSecondaryCamera) return { audio: true, video: true }
+
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices()
+    const cameras = devices
+      .filter((device) => device.kind === 'videoinput' && device.deviceId)
+    const microphones = devices
+      .filter((device) => device.kind === 'audioinput' && device.deviceId)
+    const secondary = cameras.at(-1)
+    const secondaryMicrophone = microphones.at(-1)
+    return {
+      audio: microphones.length > 1 && secondaryMicrophone
+        ? { deviceId: { exact: secondaryMicrophone.deviceId } }
+        : true,
+      video: cameras.length > 1 && secondary
+        ? { deviceId: { exact: secondary.deviceId } }
+        : true,
+    }
+  } catch {
+    // The normal browser permission flow below remains the fallback.
+  }
+  return { audio: true, video: true }
+}
+
+async function acquireTracksWithTimeout(): Promise<LocalTrack[]> {
+  const search = new URLSearchParams(window.location.search)
+  const allowTestMedia = isLoopbackMediaTestHost(window.location.hostname)
+  const useSyntheticMedia = allowTestMedia
+    && search.get('test_synthetic_media') === '1'
+  if (useSyntheticMedia) {
+    return [
+      new LocalVideoTrack(getEmptyVideoStreamTrack()),
+      new LocalAudioTrack(getEmptyAudioStreamTrack()),
+    ]
+  }
+
+  let timedOut = false
+  let timeout: number | undefined
+  const useSyntheticVideo = allowTestMedia && search.get('test_audio_only') === '1'
+  const captureOptions = await volunteerCaptureOptions()
+  const acquisition = createLocalTracks({
+    audio: captureOptions.audio,
+    video: useSyntheticVideo ? false : captureOptions.video,
+  }).then((tracks) => {
+    if (timedOut) {
+      tracks.forEach((track) => track.stop())
+      throw new Error('Camera and microphone access timed out')
+    }
+    return useSyntheticVideo
+      ? [new LocalVideoTrack(getEmptyVideoStreamTrack()), ...tracks]
+      : tracks
+  })
+  const deadline = new Promise<never>((_, reject) => {
+    timeout = window.setTimeout(() => {
+      timedOut = true
+      reject(new Error('Camera and microphone access timed out'))
+    }, volunteerMediaAcquisitionTimeoutMilliseconds)
+  })
+  try {
+    return await Promise.race([acquisition, deadline])
+  } finally {
+    if (timeout !== undefined) window.clearTimeout(timeout)
+  }
+}
+
 export const acquireVolunteerMedia: AcquireVolunteerMedia = async () => {
-  const tracks = await createLocalTracks({ audio: true, video: true })
+  const tracks = await acquireTracksWithTimeout()
   const camera = tracks.find((track) => track.kind === Track.Kind.Video)
   const microphone = tracks.find((track) => track.kind === Track.Kind.Audio)
   if (!camera || !microphone) {
@@ -106,6 +191,7 @@ export function dispatchElderMessage(payload: Uint8Array, events: LiveSessionEve
   if (message.type === 'control.freeze') events.onFreeze(message.reason)
   if (message.type === 'control.resume') events.onResume()
   if (message.type === 'safety.risk') events.onRisk(message)
+  if (message.type === 'caption.transcript') events.onCaption(message)
 }
 
 export const connectVolunteerSession: ConnectVolunteerSession = async (joined, events, media) => {
@@ -115,11 +201,19 @@ export const connectVolunteerSession: ConnectVolunteerSession = async (joined, e
   let audioElement: HTMLAudioElement | null = null
   let localCameraTrack: LocalTrack | null = null
   let localMediaStopped = false
+  let disconnectNotified = false
 
   function stopLocalMedia(): void {
     if (localMediaStopped) return
     localMediaStopped = true
     media.stop()
+  }
+
+  function notifyDisconnected(): void {
+    if (disconnectNotified) return
+    disconnectNotified = true
+    stopLocalMedia()
+    events.onDisconnected()
   }
 
   function attachTrack(track: RemoteTrack, trackName?: string): void {
@@ -170,7 +264,11 @@ export const connectVolunteerSession: ConnectVolunteerSession = async (joined, e
       // Ignore malformed or future-version room messages.
     }
   })
-  room.on(RoomEvent.Disconnected, events.onDisconnected)
+  room.on(RoomEvent.ParticipantDisconnected, (participant) => {
+    if (participant.identity !== 'elder') return
+    void room.disconnect(true).finally(notifyDisconnected)
+  })
+  room.on(RoomEvent.Disconnected, notifyDisconnected)
 
   try {
     await room.connect(joined.liveKitUrl, joined.liveKitToken)

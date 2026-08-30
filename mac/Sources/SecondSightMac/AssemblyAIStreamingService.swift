@@ -54,7 +54,7 @@ final class AssemblyAIStreamingService: NSObject, AudioRenderer, @unchecked Send
         channels: 1,
         interleaved: true
     )!
-    private weak var track: RemoteAudioTrack?
+    private weak var track: (any AudioTrack)?
     private var socket: URLSessionWebSocketTask?
     private var audioSendTask: Task<Void, Never>?
     private var terminationSendTask: Task<Void, Never>?
@@ -73,7 +73,7 @@ final class AssemblyAIStreamingService: NSObject, AudioRenderer, @unchecked Send
         self.urlSession = urlSession
     }
 
-    func start(track: RemoteAudioTrack, token: String) throws {
+    func start(track: any AudioTrack, token: String) throws {
         guard let url = Self.websocketURL(token: token) else {
             throw StreamingError.invalidCredential
         }

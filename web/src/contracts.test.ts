@@ -70,4 +70,20 @@ describe('DataChannel v1 messages', () => {
       transcript: `${risk.transcript}验`,
     })))).toThrow('1000 Unicode scalar values')
   })
+
+  it('accepts speaker-labelled partial and final captions', () => {
+    const caption = {
+      v: 1,
+      type: 'caption.transcript',
+      speaker: 'volunteer',
+      turn_order: 3,
+      text: 'Please open Settings',
+      is_final: false,
+    }
+    expect(decodeDataMessage(new TextEncoder().encode(JSON.stringify(caption)))).toEqual(caption)
+    expect(() => decodeDataMessage(new TextEncoder().encode(JSON.stringify({
+      ...caption,
+      speaker: 'unknown',
+    })))).toThrow('speaker')
+  })
 })

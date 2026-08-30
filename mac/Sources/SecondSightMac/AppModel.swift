@@ -58,6 +58,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var notifiedAssistantCount: Int?
     @Published private(set) var broadcastMessage: LocalizedCopy?
     @Published private(set) var isCallTransportConnected = false
+    @Published var helpRequestGoal = ""
+    @Published private(set) var isEndingSession = false
 
     private static let defaultAIEnabled = false
 
@@ -73,7 +75,8 @@ final class AppModel: ObservableObject {
     private let transport = LiveKitTransport()
     private let overlay = OverlayWindowController()
     private let speech = SpeechSynthesizer()
-    private let safetyStreaming = AssemblyAIStreamingService()
+    private let elderSafetyStreaming = AssemblyAIStreamingService()
+    private let volunteerSafetyStreaming = AssemblyAIStreamingService()
     private let guideSpeech = PushToTalkSpeechService()
     private let riskPipeline = RiskPipeline()
     private var riskDeduplicator = RiskEventDeduplicator(cooldown: 8)
@@ -81,13 +84,32 @@ final class AppModel: ObservableObject {
     private var volunteerAudioTrack: RemoteAudioTrack?
     private var safetyStartRequested = false
     private var safetyRequestID: UUID?
-    private var safetyCredentialRequestInFlight = false
+    private var safetyCredentialRequestsInFlight: Set<CaptionSpeaker> = []
+    private var connectedSafetySpeakers: Set<CaptionSpeaker> = []
+    private var activeElderGoal = ""
+    private struct TimedDialogueTurn: Sendable {
+        let turn: AISafetyDialogueTurn
+        let timestamp: Date
+    }
+    private struct PreparedSafetyScreenshot: Sendable {
+        let base64: String
+        let candidate: SignificantScreenChangeMonitor.Candidate
+    }
+    private var dialogueTurns: [TimedDialogueTurn] = []
+    private var nextDialogueSequence = 1
+    private var lastAnalyzedSequence = 0
+    private var safetyAnalysisPending = false
+    private var safetyAnalysisTask: Task<Void, Never>?
+    private var pendingSafetyScreenshot: PreparedSafetyScreenshot?
+    private let screenChangeMonitor = SignificantScreenChangeMonitor()
     private var currentSafetyRisk: RiskDetectionResult?
     private var currentRiskTranscript = ""
     private var screenCaptureFailed = false
     private var pendingDiscoveryMode: AssistanceDiscoveryMode?
-    private var isEndingSession = false
     private var broadcastSessionID: UUID?
+    private var helpAttemptGate = SessionAttemptGate()
+    private var helpTask: Task<Void, Never>?
+    private var cancelledHelpTaskToDrain: Task<Void, Never>?
 
     init() {
         aiFeaturesEnabled = Self.defaultAIEnabled
@@ -99,7 +121,7 @@ final class AppModel: ObservableObject {
     }
 
     func startHelp(using discoveryMode: AssistanceDiscoveryMode) {
-        guard phase == .idle || phase == .ended else { return }
+        guard !isEndingSession, phase == .idle || phase == .ended else { return }
         guard permissions.allAuthorized else {
             errorMessage = copy(
                 "请先把下面列出的权限都设为“已允许”。",
@@ -116,16 +138,19 @@ final class AppModel: ObservableObject {
     func confirmCameraAndStartHelp() {
         guard
             !isPreparingHelp,
+            !isEndingSession,
             phase == .idle || phase == .ended,
             let discoveryMode = pendingDiscoveryMode
         else { return }
         isCameraConsentPresented = false
         isPreparingHelp = true
         statusMessage = copy("正在准备摄像头……", "Preparing the camera…")
-        Task {
+        let attemptID = helpAttemptGate.begin()
+        helpTask = Task {
+            defer { finishHelpAttempt(attemptID) }
             let granted = await requestCameraAccess()
+            guard isCurrentHelpAttempt(attemptID) else { return }
             guard granted else {
-                isPreparingHelp = false
                 cameraNeedsSettings = AVCaptureDevice.authorizationStatus(for: .video) == .denied
                 statusMessage = copy("摄像头没有打开", "The camera is not on")
                 errorMessage = cameraNeedsSettings
@@ -140,8 +165,7 @@ final class AppModel: ObservableObject {
                 return
             }
             cameraNeedsSettings = false
-            await beginHelpSession(using: discoveryMode)
-            isPreparingHelp = false
+            await beginHelpSession(using: discoveryMode, attemptID: attemptID)
         }
     }
 
@@ -195,13 +219,23 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func beginHelpSession(using discoveryMode: AssistanceDiscoveryMode) async {
+    private func beginHelpSession(
+        using discoveryMode: AssistanceDiscoveryMode,
+        attemptID: UUID
+    ) async {
+        guard isCurrentHelpAttempt(attemptID) else { return }
         if api == nil {
-            do { api = EdgeAPIClient(configuration: try AppConfiguration.load()) }
-            catch { errorMessage = localizedError(error); return }
+            do {
+                api = EdgeAPIClient(configuration: try AppConfiguration.load())
+            } catch {
+                guard isCurrentHelpAttempt(attemptID) else { return }
+                errorMessage = localizedError(error)
+                return
+            }
         }
         guard let api else { return }
         do {
+            guard isCurrentHelpAttempt(attemptID) else { return }
             if phase == .ended {
                 _ = try machine.apply(.reset)
                 phase = machine.phase
@@ -216,7 +250,16 @@ final class AppModel: ObservableObject {
             broadcastSessionID = nil
             assistanceDiscoveryMode = discoveryMode
             screenCaptureFailed = false
+            activeElderGoal = helpRequestGoal.trimmingCharacters(in: .whitespacesAndNewlines)
+            if activeElderGoal.isEmpty {
+                activeElderGoal = localized(
+                    "老人没有说明具体目标；只判断明显安全风险，不判断是否偏离需求。",
+                    "The elder did not state a goal. Assess obvious safety risks only, not goal mismatch.",
+                    for: language
+                )
+            }
             let response = try await api.createSession()
+            guard isCurrentHelpAttempt(attemptID), phase == .requesting else { return }
             sessionID = response.sessionID
             elderLiveKitCredential = response.liveKitToken
             roomCode = response.code
@@ -234,21 +277,33 @@ final class AppModel: ObservableObject {
             overlay.show()
             isCallTransportConnected = false
             try await transport.connect(url: response.liveKitURL, token: response.liveKitToken)
+            guard isCurrentHelpAttempt(attemptID) else { return }
             isCallTransportConnected = true
             try await capture.start()
+            guard isCurrentHelpAttempt(attemptID) else { return }
 
             if discoveryMode == .broadcast {
-                await startAssistantBroadcast(sessionID: response.sessionID, fallbackCode: response.code)
+                await startAssistantBroadcast(
+                    sessionID: response.sessionID,
+                    fallbackCode: response.code,
+                    attemptID: attemptID
+                )
             } else {
                 speakShareCode(response.code)
             }
         } catch {
+            guard isCurrentHelpAttempt(attemptID) else { return }
+            finishHelpAttempt(attemptID)
             await failAndEnd(error)
         }
     }
 
-    private func startAssistantBroadcast(sessionID: UUID, fallbackCode: String) async {
-        guard let api else { return }
+    private func startAssistantBroadcast(
+        sessionID: UUID,
+        fallbackCode: String,
+        attemptID: UUID
+    ) async {
+        guard isCurrentHelpAttempt(attemptID), let api else { return }
         broadcastSessionID = sessionID
         statusMessage = copy(
             "正在向在线助手广播求助……",
@@ -258,6 +313,7 @@ final class AppModel: ObservableObject {
             let response = try await api.setSessionBroadcast(
                 BroadcastSessionRequest(sessionID: sessionID, isActive: true)
             )
+            guard isCurrentHelpAttempt(attemptID) else { return }
             guard phase == .waiting else {
                 _ = try? await api.setSessionBroadcast(
                     BroadcastSessionRequest(sessionID: sessionID, isActive: false)
@@ -291,7 +347,7 @@ final class AppModel: ObservableObject {
                 for: language
             ))
         } catch {
-            guard phase == .waiting else { return }
+            guard isCurrentHelpAttempt(attemptID), phase == .waiting else { return }
             assistanceDiscoveryMode = .shareCode
             notifiedAssistantCount = nil
             broadcastMessage = copy(
@@ -316,7 +372,30 @@ final class AppModel: ObservableObject {
     }
 
     func endSession() {
+        cancelPendingHelpAttempt()
         Task { await endSessionNow() }
+    }
+
+    private func isCurrentHelpAttempt(_ attemptID: UUID) -> Bool {
+        !Task.isCancelled && helpAttemptGate.accepts(attemptID)
+    }
+
+    private func finishHelpAttempt(_ attemptID: UUID) {
+        guard helpAttemptGate.finish(attemptID) else { return }
+        helpTask = nil
+        isPreparingHelp = false
+    }
+
+    private func cancelPendingHelpAttempt() {
+        helpAttemptGate.invalidate()
+        guard let helpTask else {
+            isPreparingHelp = false
+            return
+        }
+        helpTask.cancel()
+        cancelledHelpTaskToDrain = helpTask
+        self.helpTask = nil
+        isPreparingHelp = false
     }
 
     func startGuideRecording() {
@@ -437,7 +516,8 @@ final class AppModel: ObservableObject {
 
         safetyStartRequested = true
         safetyRequestID = UUID()
-        safetyCredentialRequestInFlight = false
+        safetyCredentialRequestsInFlight = []
+        connectedSafetySpeakers = []
         safetyState = .connecting
         safetyStatusMessage = volunteerAudioTrack == nil
             ? copy("正在等待志愿者的声音……", "Waiting for the volunteer’s audio…")
@@ -448,18 +528,34 @@ final class AppModel: ObservableObject {
         riskDeduplicator = RiskEventDeduplicator(cooldown: 8)
         currentSafetyRisk = nil
         currentRiskTranscript = ""
+        dialogueTurns = []
+        nextDialogueSequence = 1
+        lastAnalyzedSequence = 0
+        safetyAnalysisPending = false
+        safetyAnalysisTask?.cancel()
+        safetyAnalysisTask = nil
+        pendingSafetyScreenshot = nil
+        screenChangeMonitor.reset()
         errorMessage = nil
 
+        beginSafetyStreaming(speaker: .elder, track: transport.elderMicrophoneTrack())
         if let volunteerAudioTrack {
-            beginSafetyStreaming(track: volunteerAudioTrack)
+            beginSafetyStreaming(speaker: .volunteer, track: volunteerAudioTrack)
         }
     }
 
     private func stopSafetyListening() {
         safetyStartRequested = false
         safetyRequestID = nil
-        safetyCredentialRequestInFlight = false
-        safetyStreaming.stop()
+        safetyCredentialRequestsInFlight = []
+        connectedSafetySpeakers = []
+        elderSafetyStreaming.stop()
+        volunteerSafetyStreaming.stop()
+        safetyAnalysisTask?.cancel()
+        safetyAnalysisTask = nil
+        safetyAnalysisPending = false
+        pendingSafetyScreenshot = nil
+        screenChangeMonitor.reset()
         safetyState = .off
         safetyStatusMessage = copy("安全监听已经停止。", "Safety monitoring has stopped.")
         livePartialTranscript = ""
@@ -468,26 +564,37 @@ final class AppModel: ObservableObject {
 
     private func remoteAudioBecameAvailable(_ track: RemoteAudioTrack) {
         volunteerAudioTrack = track
-        if safetyStartRequested, safetyState == .connecting {
-            beginSafetyStreaming(track: track)
+        if safetyStartRequested, !connectedSafetySpeakers.contains(.volunteer) {
+            beginSafetyStreaming(speaker: .volunteer, track: track)
         }
     }
 
     private func remoteAudioBecameUnavailable() {
         volunteerAudioTrack = nil
-        safetyMonitoringDisconnected(reason: copy(
-            "志愿者声音已经断开。",
-            "The volunteer’s audio disconnected."
-        ))
+        volunteerSafetyStreaming.stop()
+        connectedSafetySpeakers.remove(.volunteer)
+        safetyCredentialRequestsInFlight.remove(.volunteer)
+        if safetyStartRequested, connectedSafetySpeakers.contains(.elder) {
+            markSafetyMonitoringDegraded(reason: copy(
+                "志愿者声音已经断开，仍在监听老人端。",
+                "The volunteer’s audio disconnected; elder-side monitoring remains active."
+            ))
+        } else {
+            safetyMonitoringDisconnected(reason: copy(
+                "志愿者声音已经断开。",
+                "The volunteer’s audio disconnected."
+            ))
+        }
     }
 
-    private func beginSafetyStreaming(track: RemoteAudioTrack) {
-        guard safetyStartRequested, safetyState == .connecting,
-              !safetyCredentialRequestInFlight,
+    private func beginSafetyStreaming(speaker: CaptionSpeaker, track: any AudioTrack) {
+        guard safetyStartRequested,
+              !safetyCredentialRequestsInFlight.contains(speaker),
+              !connectedSafetySpeakers.contains(speaker),
               let sessionID, let api, let elderLiveKitCredential,
               let requestID = safetyRequestID
         else { return }
-        safetyCredentialRequestInFlight = true
+        safetyCredentialRequestsInFlight.insert(speaker)
         safetyStatusMessage = copy("正在连接实时字幕……", "Connecting live captions…")
 
         Task {
@@ -496,19 +603,67 @@ final class AppModel: ObservableObject {
                     sessionID: sessionID,
                     elderCredential: elderLiveKitCredential
                 )
-                guard safetyStartRequested, safetyState == .connecting,
+                guard safetyStartRequested,
                       safetyRequestID == requestID
                 else { return }
-                safetyCredentialRequestInFlight = false
-                try safetyStreaming.start(track: track, token: credential.token)
+                safetyCredentialRequestsInFlight.remove(speaker)
+                try streamingService(for: speaker).start(track: track, token: credential.token)
             } catch {
                 guard safetyRequestID == requestID else { return }
-                safetyCredentialRequestInFlight = false
-                safetyMonitoringDisconnected(reason: copy(
-                    "无法连接实时字幕服务，请稍后重试。",
-                    "Could not connect to live captions. Try again later."
-                ))
+                safetyCredentialRequestsInFlight.remove(speaker)
+                if connectedSafetySpeakers.isEmpty, safetyCredentialRequestsInFlight.isEmpty {
+                    safetyMonitoringDisconnected(reason: copy(
+                        "无法连接实时字幕服务，请稍后重试。",
+                        "Could not connect to live captions. Try again later."
+                    ))
+                } else if !connectedSafetySpeakers.isEmpty {
+                    markSafetyMonitoringDegraded(reason: copy(
+                        "有一路实时字幕暂时不可用。",
+                        "One live-caption audio source is temporarily unavailable."
+                    ))
+                } else {
+                    safetyStatusMessage = copy(
+                        "一路实时字幕连接失败，正在等待另一路……",
+                        "One live-caption source failed; waiting for the other…"
+                    )
+                }
             }
+        }
+    }
+
+    private func streamingService(for speaker: CaptionSpeaker) -> AssemblyAIStreamingService {
+        speaker == .elder ? elderSafetyStreaming : volunteerSafetyStreaming
+    }
+
+    private func safetyStreamConnected(_ speaker: CaptionSpeaker) {
+        guard safetyStartRequested else { return }
+        connectedSafetySpeakers.insert(speaker)
+        if connectedSafetySpeakers.contains(.elder), connectedSafetySpeakers.contains(.volunteer) {
+            safetyState = .listening
+            safetyStatusMessage = copy("正在监听双方对话……", "Listening to both sides…")
+        } else {
+            safetyState = .degraded
+            safetyStatusMessage = copy(
+                "正在监听一路声音，等待另一路接入……",
+                "Listening to one side while waiting for the other…"
+            )
+        }
+    }
+
+    private func safetyStreamDisconnected(_ speaker: CaptionSpeaker) {
+        connectedSafetySpeakers.remove(speaker)
+        safetyCredentialRequestsInFlight.remove(speaker)
+        guard safetyStartRequested else { return }
+        if connectedSafetySpeakers.isEmpty {
+            safetyMonitoringDisconnected(reason: copy(
+                "实时字幕连接已断开，请稍后重试。",
+                "Live captions disconnected. Try again later."
+            ))
+        } else {
+            markSafetyMonitoringDegraded(reason: copy(
+                "有一路实时字幕连接已断开。",
+                "One live-caption audio source disconnected."
+            ))
         }
     }
 
@@ -516,8 +671,15 @@ final class AppModel: ObservableObject {
         guard safetyState == .connecting || safetyState == .listening || safetyState == .degraded else { return }
         safetyStartRequested = false
         safetyRequestID = nil
-        safetyCredentialRequestInFlight = false
-        safetyStreaming.stop()
+        safetyCredentialRequestsInFlight = []
+        connectedSafetySpeakers = []
+        elderSafetyStreaming.stop()
+        volunteerSafetyStreaming.stop()
+        safetyAnalysisTask?.cancel()
+        safetyAnalysisTask = nil
+        safetyAnalysisPending = false
+        pendingSafetyScreenshot = nil
+        screenChangeMonitor.reset()
         safetyState = .disconnected
         safetyStatusMessage = copy(
             "当前没有安全保护：\(reason.chinese)",
@@ -541,22 +703,48 @@ final class AppModel: ObservableObject {
         )
     }
 
-    private func handleSafetyTranscript(_ update: StreamingTranscript) async {
+    private func handleSafetyTranscript(_ update: StreamingTranscript, speaker: CaptionSpeaker) async {
         guard safetyState == .listening || safetyState == .degraded else { return }
         let now = Date()
         let context = recentTranscript.transcripts(at: now)
 
+        Task {
+            try? await transport.publish(
+                .caption(
+                    speaker: speaker,
+                    turnOrder: update.turnOrder,
+                    text: update.text,
+                    isFinal: update.isFinal
+                ),
+                reliable: update.isFinal
+            )
+        }
+
         if update.isFinal {
             livePartialTranscript = ""
-            recentTranscript.append(update.text, at: now)
-            recentTranscriptLines.append(update.text)
+            let speakerLabel = speaker == .elder
+                ? localized("老人", "Elder", for: language)
+                : localized("志愿者", "Volunteer", for: language)
+            recentTranscript.append("\(speaker.rawValue): \(update.text)", at: now)
+            recentTranscriptLines.append("\(speakerLabel)：\(update.text)")
             if recentTranscriptLines.count > 6 {
                 recentTranscriptLines.removeFirst(recentTranscriptLines.count - 6)
             }
+            dialogueTurns.append(.init(
+                turn: .init(sequence: nextDialogueSequence, speaker: speaker, text: update.text),
+                timestamp: now
+            ))
+            nextDialogueSequence += 1
+            dialogueTurns.removeAll { now.timeIntervalSince($0.timestamp) > 30 }
+            if dialogueTurns.count > 24 {
+                dialogueTurns.removeFirst(dialogueTurns.count - 24)
+            }
+            scheduleSafetyAnalysis()
         } else {
-            livePartialTranscript = update.text
+            livePartialTranscript = "\(speaker == .elder ? localized("老人", "Elder", for: language) : localized("志愿者", "Volunteer", for: language))：\(update.text)"
         }
 
+        guard speaker == .volunteer else { return }
         let decision = await riskPipeline.analyze(
             transcript: update.text,
             recentTranscript: context,
@@ -566,7 +754,7 @@ final class AppModel: ObservableObject {
               riskDeduplicator.shouldEmit(
                   decision,
                   transcript: update.text,
-                  eventID: "turn-\(update.turnOrder)",
+                  eventID: "volunteer-turn-\(update.turnOrder)",
                   at: now
               ),
               let sessionID, let api, let elderLiveKitCredential
@@ -623,6 +811,139 @@ final class AppModel: ObservableObject {
                 )
             }
         }
+    }
+
+    private func scheduleSafetyAnalysis() {
+        safetyAnalysisPending = true
+        guard safetyAnalysisTask == nil else { return }
+        let requestID = safetyRequestID
+        safetyAnalysisTask = Task { [weak self] in
+            await self?.drainSafetyAnalysis(requestID: requestID)
+        }
+    }
+
+    private func drainSafetyAnalysis(requestID: UUID?) async {
+        defer {
+            safetyAnalysisTask = nil
+            if safetyAnalysisPending, safetyStartRequested, safetyRequestID == requestID {
+                scheduleSafetyAnalysis()
+            }
+        }
+
+        while safetyAnalysisPending, !Task.isCancelled,
+              safetyStartRequested, safetyRequestID == requestID
+        {
+            safetyAnalysisPending = false
+            guard let sessionID, let api, let elderLiveKitCredential,
+                  let newest = dialogueTurns.last,
+                  newest.turn.sequence > lastAnalyzedSequence
+            else { continue }
+
+            let screenshot = await prepareSafetyScreenshotIfNeeded()
+            let request = AISafetyAnalysisRequest(
+                sessionID: sessionID,
+                elderGoal: activeElderGoal,
+                throughSequence: newest.turn.sequence,
+                dialogue: dialogueTurns.map(\.turn),
+                screenshotBase64: screenshot?.base64,
+                screenRevision: screenshot?.candidate.revision
+            )
+
+            do {
+                let response = try await api.analyzeSafety(
+                    request,
+                    elderCredential: elderLiveKitCredential
+                )
+                guard safetyStartRequested, safetyRequestID == requestID,
+                      response.throughSequence >= lastAnalyzedSequence
+                else { continue }
+                lastAnalyzedSequence = response.throughSequence
+                if let screenshot {
+                    screenChangeMonitor.commit(screenshot.candidate)
+                    pendingSafetyScreenshot = nil
+                }
+                guard response.level != .safe else { continue }
+                let transcript = dialogueTurns
+                    .map { "\($0.turn.speaker.rawValue): \($0.turn.text)" }
+                    .joined(separator: "\n")
+                let decision = RiskDetectionResult(
+                    level: response.level,
+                    matchedRules: ["ai_\(response.category.rawValue)"],
+                    message: response.reason
+                )
+                await emitAISafetyRisk(
+                    decision,
+                    transcript: transcript,
+                    eventID: "ai-through-\(response.throughSequence)"
+                )
+            } catch is CancellationError {
+                return
+            } catch {
+                markSafetyMonitoringDegraded(reason: copy(
+                    "DeepSeek 安全分析暂时不可用，实时字幕和本机高危词提醒仍在工作。",
+                    "DeepSeek safety analysis is unavailable; live captions and on-device high-risk checks still work."
+                ))
+            }
+        }
+    }
+
+    private func prepareSafetyScreenshotIfNeeded() async -> PreparedSafetyScreenshot? {
+        if let pendingSafetyScreenshot { return pendingSafetyScreenshot }
+        guard let frame = capture.latestFrame.get(),
+              let candidate = screenChangeMonitor.candidate(for: frame),
+              let jpeg = await Task.detached(
+                  priority: .utility,
+                  operation: { RedactedJPEGEncoder.encode(frame) }
+              ).value
+        else { return nil }
+        let prepared = PreparedSafetyScreenshot(
+            base64: jpeg.base64EncodedString(),
+            candidate: candidate
+        )
+        pendingSafetyScreenshot = prepared
+        return prepared
+    }
+
+    private func emitAISafetyRisk(
+        _ decision: RiskDetectionResult,
+        transcript: String,
+        eventID: String
+    ) async {
+        let now = Date()
+        guard riskDeduplicator.shouldEmit(
+            decision,
+            transcript: transcript,
+            eventID: eventID,
+            at: now
+        ), let sessionID, let api, let elderLiveKitCredential
+        else { return }
+
+        currentSafetyRisk = decision
+        currentRiskTranscript = transcript
+        overlay.model.showSafetyWarning(level: decision.level, transcript: decision.message)
+        overlay.setSafetyWarningVisible(true)
+        speech.speak(localized(
+            "安全提醒。志愿者的指导可能有风险或偏离您的需求，请先停下来核对。",
+            "Safety alert. The guidance may be risky or may not match your request. Pause and check before continuing.",
+            for: language
+        ))
+        let message = DataMessage.safetyRisk(
+            level: decision.level,
+            transcript: transcript,
+            matchedRules: decision.matchedRules
+        )
+        let boundedEventTranscript = String(transcript.prefix(1_000))
+        let event = RiskEventRequest(
+            sessionID: sessionID,
+            timestamp: ISO8601DateFormatter().string(from: now),
+            level: decision.level,
+            transcript: boundedEventTranscript,
+            matchedRules: decision.matchedRules
+        )
+        do { try await transport.publish(message) }
+        catch { markSafetyMonitoringDegraded(reason: copy("志愿者通知暂时不可用。", "Volunteer notifications are temporarily unavailable.")) }
+        do { _ = try await api.recordRiskEvent(event, elderCredential: elderLiveKitCredential) }
+        catch { markSafetyMonitoringDegraded(reason: copy("后端告警记录暂时不可用。", "Server-side alert records are temporarily unavailable.")) }
     }
 
     func resumeAfterFalsePositive() {
@@ -768,22 +1089,30 @@ final class AppModel: ObservableObject {
                 ))
             }
         }
-        safetyStreaming.onConnected = { [weak self] in
+        elderSafetyStreaming.onConnected = { [weak self] in
             Task { @MainActor in
-                guard self?.safetyStartRequested == true else { return }
-                self?.safetyState = .listening
-                self?.safetyStatusMessage = copy("正在监听……", "Listening…")
+                self?.safetyStreamConnected(.elder)
             }
         }
-        safetyStreaming.onTranscript = { [weak self] update in
-            Task { @MainActor in await self?.handleSafetyTranscript(update) }
+        elderSafetyStreaming.onTranscript = { [weak self] update in
+            Task { @MainActor in await self?.handleSafetyTranscript(update, speaker: .elder) }
         }
-        safetyStreaming.onDisconnected = { [weak self] _ in
+        elderSafetyStreaming.onDisconnected = { [weak self] _ in
             Task { @MainActor in
-                self?.safetyMonitoringDisconnected(reason: copy(
-                    "实时字幕连接已断开，请稍后重试。",
-                    "Live captions disconnected. Try again later."
-                ))
+                self?.safetyStreamDisconnected(.elder)
+            }
+        }
+        volunteerSafetyStreaming.onConnected = { [weak self] in
+            Task { @MainActor in
+                self?.safetyStreamConnected(.volunteer)
+            }
+        }
+        volunteerSafetyStreaming.onTranscript = { [weak self] update in
+            Task { @MainActor in await self?.handleSafetyTranscript(update, speaker: .volunteer) }
+        }
+        volunteerSafetyStreaming.onDisconnected = { [weak self] _ in
+            Task { @MainActor in
+                self?.safetyStreamDisconnected(.volunteer)
             }
         }
         overlay.model.onResume = { [weak self] in self?.resumeAfterFalsePositive() }
@@ -836,7 +1165,7 @@ final class AppModel: ObservableObject {
             Task { await freeze(reason: reason, transcript: "") }
         case .resume:
             resumeAfterFalsePositive()
-        case .safetyRisk:
+        case .safetyRisk, .caption:
             break
         }
     }
@@ -881,8 +1210,15 @@ final class AppModel: ObservableObject {
             )
             guideStatus = copy("请按住再说一次", "Hold the button and try again")
         case let .success(taskText):
-            guard let sessionID, let frame = capture.latestFrame.get(), let api else { return }
-            guard let jpeg = await Task.detached(priority: .userInitiated, operation: { RedactedJPEGEncoder.encode(frame) }).value else {
+            guard let sessionID,
+                  let elderLiveKitCredential,
+                  let protectedFrame = capture.latestFrame.getSnapshot(),
+                  let api
+            else { return }
+            guard let jpeg = await Task.detached(
+                priority: .userInitiated,
+                operation: { RedactedJPEGEncoder.encode(protectedFrame.frame) }
+            ).value else {
                 errorMessage = copy(
                     "无法准备安全截图。",
                     "Could not prepare a protected screenshot."
@@ -894,13 +1230,15 @@ final class AppModel: ObservableObject {
                     sessionID: sessionID,
                     task: taskText,
                     screenshotBase64: jpeg.base64EncodedString(),
-                    axSummary: scanner.store.current().axSummary
+                    axSummary: protectedFrame.axSummary
                 )
-                let response = try await api.requestGuide(request)
+                let response = try await api.requestGuide(
+                    request,
+                    elderCredential: elderLiveKitCredential
+                )
                 guideStatus = .verbatim(response.instructionText)
                 speech.speak(response.instructionText)
                 if let rect = response.targetRect { overlay.model.guide(rect: rect) }
-                await api.logEvent(LogEventRequest(sessionID: sessionID, actor: "ai_guide", kind: "ai.instruction", payload: ["task": .string(taskText), "instruction": .string(response.instructionText)]))
             } catch {
                 errorMessage = copy(
                     "AI 指路失败：\(error.localizedDescription)",
@@ -925,6 +1263,11 @@ final class AppModel: ObservableObject {
         guard !isEndingSession else { return }
         isEndingSession = true
         defer { isEndingSession = false }
+
+        cancelPendingHelpAttempt()
+        let cancelledHelpTask = cancelledHelpTaskToDrain
+        cancelledHelpTaskToDrain = nil
+        await cancelledHelpTask?.value
 
         stopSafetyListening()
         let broadcastSessionIDToWithdraw = broadcastSessionID
@@ -956,6 +1299,7 @@ final class AppModel: ObservableObject {
         broadcastMessage = nil
         mediaRecoveryMessage = nil
         screenCaptureFailed = false
+        activeElderGoal = ""
         statusMessage = finalStatusMessage
 
         // Withdrawal starts before local cleanup but never delays it.

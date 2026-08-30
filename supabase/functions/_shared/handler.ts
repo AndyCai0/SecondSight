@@ -33,6 +33,27 @@ export interface ElderCredentialGrant {
   room: string
 }
 
+export type SafetySpeaker = 'elder' | 'volunteer'
+export type SafetyLevel = 'safe' | 'warning' | 'danger'
+export type SafetyCategory =
+  | 'none'
+  | 'sensitive_information'
+  | 'financial_request'
+  | 'software_installation'
+  | 'unknown_link'
+  | 'pressure'
+  | 'goal_mismatch'
+  | 'screen_mismatch'
+  | 'other'
+
+export interface SafetyAnalysisInput {
+  elderGoal: string
+  throughSequence: number
+  dialogue: Array<{ sequence: number; speaker: SafetySpeaker; text: string }>
+  screenshotBase64?: string
+  screenRevision?: number
+}
+
 export interface EdgeDependencies {
   sessions: {
     create(code: string): Promise<SessionRecord>
@@ -93,8 +114,9 @@ export interface EdgeDependencies {
       targetRect: { x: number; y: number; w: number; h: number } | null
       confidence: number
     }>
-    referee(transcript: string): Promise<{
-      verdict: 'ok' | 'warn' | 'freeze'
+    analyzeSafety(input: SafetyAnalysisInput): Promise<{
+      level: SafetyLevel
+      category: SafetyCategory
       reason: string
     }>
   }
@@ -332,19 +354,31 @@ export async function handleEdgeRequest(
 
   if (functionName === 'ai-guide') {
     const body = await readObject(request)
-    const sessionId = stringField(body, 'session_id')
+    const sessionId = stringField(body, 'session_id').trim()
     const task = stringField(body, 'task').trim()
     const screenshotBase64 = stringField(body, 'screenshot_base64')
     const rawAxSummary = body.ax_summary
     const axSummary = typeof rawAxSummary === 'string' && rawAxSummary.length > 0
       ? rawAxSummary
       : undefined
+    const taskBytes = new TextEncoder().encode(task).byteLength
     if (
-      sessionId.length === 0 || task.length === 0 || screenshotBase64.length === 0 ||
+      !isUuid(sessionId) || task.length === 0 || taskBytes > 4_096 ||
+      screenshotBase64.length === 0 || screenshotBase64.length > 6_000_000 ||
       (axSummary !== undefined && new TextEncoder().encode(axSummary).byteLength > 8_192)
     ) {
       return jsonResponse({ error: 'Invalid AI guide request' }, 400)
     }
+
+    const elderGrant = await readElderCredential(request, dependencies)
+    if (elderGrant instanceof Response) return elderGrant
+    const session = await dependencies.sessions.findById(sessionId)
+    if (!session) return jsonResponse({ error: 'Session not found' }, 404)
+    if (elderGrant.identity !== 'elder' || elderGrant.room !== session.code) {
+      return jsonResponse({ error: 'Elder credential is not valid for this session' }, 403)
+    }
+    if (session.status === 'ended') return jsonResponse({ error: 'Session has ended' }, 410)
+    if (session.status === 'frozen') return jsonResponse({ error: 'Session is frozen' }, 423)
 
     const result = await dependencies.ai.guide({ task, screenshotBase64, axSummary })
     const responseBody = {
@@ -363,25 +397,61 @@ export async function handleEdgeRequest(
 
   if (functionName === 'ai-referee') {
     const body = await readObject(request)
-    const sessionId = stringField(body, 'session_id')
-    const transcript = stringField(body, 'transcript').trim()
-    if (sessionId.length === 0 || transcript.length === 0) {
-      return jsonResponse({ error: 'Invalid referee request' }, 400)
+    const sessionId = stringField(body, 'session_id').trim()
+    const elderGoal = stringField(body, 'elder_goal').trim()
+    const throughSequence = body.through_sequence
+    const rawDialogue = body.dialogue
+    const screenshotBase64 =
+      typeof body.screenshot_base64 === 'string' && body.screenshot_base64.length > 0
+        ? body.screenshot_base64
+        : undefined
+    const screenRevision = body.screen_revision
+    const dialogue = parseSafetyDialogue(rawDialogue)
+    const encodedGoalLength = new TextEncoder().encode(elderGoal).byteLength
+    const totalDialogueBytes = dialogue?.reduce(
+      (total, turn) => total + new TextEncoder().encode(turn.text).byteLength,
+      0,
+    ) ?? 0
+    if (
+      !isUuid(sessionId) || elderGoal.length === 0 || encodedGoalLength > 4_096 ||
+      !Number.isInteger(throughSequence) || (throughSequence as number) <= 0 ||
+      dialogue === null || dialogue.at(-1)?.sequence !== throughSequence ||
+      totalDialogueBytes > 16_384 ||
+      (screenshotBase64 !== undefined && screenshotBase64.length > 6_000_000) ||
+      (screenshotBase64 !== undefined &&
+        (!Number.isInteger(screenRevision) || (screenRevision as number) <= 0)) ||
+      (screenshotBase64 === undefined && screenRevision !== undefined)
+    ) {
+      return jsonResponse({ error: 'Invalid safety analysis request' }, 400)
     }
 
-    const result = await dependencies.ai.referee(transcript)
-    if (result.verdict !== 'ok') {
+    const elderGrant = await readElderCredential(request, dependencies)
+    if (elderGrant instanceof Response) return elderGrant
+    const session = await dependencies.sessions.findById(sessionId)
+    if (!session) return jsonResponse({ error: 'Session not found' }, 404)
+    if (elderGrant.identity !== 'elder' || elderGrant.room !== session.code) {
+      return jsonResponse({ error: 'Elder credential is not valid for this session' }, 403)
+    }
+    if (session.status === 'ended') return jsonResponse({ error: 'Session has ended' }, 410)
+    if (session.status === 'frozen') return jsonResponse({ error: 'Session is frozen' }, 423)
+
+    const result = await dependencies.ai.analyzeSafety({
+      elderGoal,
+      throughSequence: throughSequence as number,
+      dialogue,
+      screenshotBase64,
+      screenRevision: screenshotBase64 === undefined ? undefined : screenRevision as number,
+    })
+    const transcript = dialogue.map((turn) => `${turn.speaker}: ${turn.text}`).join('\n')
+    if (result.level !== 'safe') {
       await dependencies.alerts.insert({
         sessionId,
-        severity: result.verdict,
+        severity: 'warn',
         transcript,
         reason: result.reason,
       })
     }
-    if (result.verdict === 'freeze') {
-      await dependencies.sessions.freeze(sessionId)
-    }
-    return jsonResponse(result)
+    return jsonResponse({ ...result, through_sequence: throughSequence })
   }
 
   if (functionName === 'log-event') {
@@ -544,6 +614,28 @@ function isObject(value: unknown): value is Record<string, unknown> {
 function isUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
     .test(value)
+}
+
+function parseSafetyDialogue(
+  value: unknown,
+): SafetyAnalysisInput['dialogue'] | null {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 24) return null
+  const dialogue: SafetyAnalysisInput['dialogue'] = []
+  let previousSequence = 0
+  for (const rawTurn of value) {
+    if (!isObject(rawTurn)) return null
+    const sequence = rawTurn.sequence
+    const speaker = rawTurn.speaker
+    const text = typeof rawTurn.text === 'string' ? rawTurn.text.trim() : ''
+    if (
+      !Number.isInteger(sequence) || (sequence as number) <= previousSequence ||
+      (speaker !== 'elder' && speaker !== 'volunteer') ||
+      text.length === 0 || new TextEncoder().encode(text).byteLength > 4_096
+    ) return null
+    previousSequence = sequence as number
+    dialogue.push({ sequence: previousSequence, speaker, text })
+  }
+  return dialogue
 }
 
 const ASSISTANT_PRESENCE_TTL_MS = 3_000

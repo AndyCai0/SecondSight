@@ -59,7 +59,7 @@ final class OverlayModel: ObservableObject {
             upsert(OverlayAnnotation(id: "pointer", shape: .pointer(x: x, y: y), expiresAt: now.addingTimeInterval(0.35)))
         case .clear:
             annotations.removeAll()
-        case .freeze, .resume, .textToSpeech, .safetyRisk:
+        case .freeze, .resume, .textToSpeech, .safetyRisk, .caption:
             break
         }
     }

@@ -35,6 +35,15 @@ export type SafetyRiskMessage = {
   matched_rules: string[]
 }
 
+export type CaptionTranscriptMessage = {
+  v: 1
+  type: 'caption.transcript'
+  speaker: 'elder' | 'volunteer'
+  turn_order: number
+  text: string
+  is_final: boolean
+}
+
 export type DataMessage =
   | CircleAnnotation
   | ArrowAnnotation
@@ -44,10 +53,11 @@ export type DataMessage =
   | { v: 1; type: 'control.resume' }
   | { v: 1; type: 'chat.tts'; text: string }
   | SafetyRiskMessage
+  | CaptionTranscriptMessage
 
 export type VolunteerOutboundMessage = Exclude<
   DataMessage,
-  { type: 'control.freeze' | 'control.resume' | 'safety.risk' }
+  { type: 'control.freeze' | 'control.resume' | 'safety.risk' | 'caption.transcript' }
 >
 
 export function decodeDataMessage(bytes: Uint8Array): DataMessage {
@@ -103,6 +113,18 @@ export function decodeDataMessage(bytes: Uint8Array): DataMessage {
       }
       assertRiskRules(value.matched_rules)
       return value as SafetyRiskMessage
+    case 'caption.transcript':
+      if (value.speaker !== 'elder' && value.speaker !== 'volunteer') {
+        throw new Error('speaker must be elder or volunteer')
+      }
+      if (!Number.isInteger(value.turn_order) || (value.turn_order as number) < 0) {
+        throw new Error('turn_order must be a non-negative integer')
+      }
+      assertText(value.text, 'text', 2_000)
+      if (typeof value.is_final !== 'boolean') {
+        throw new Error('is_final must be boolean')
+      }
+      return value as CaptionTranscriptMessage
     default:
       throw new Error(`Unsupported DataChannel message type: ${value.type}`)
   }
@@ -113,7 +135,8 @@ export function encodeDataMessage(message: DataMessage): Uint8Array {
 }
 
 export function isReliableMessage(message: DataMessage): boolean {
-  return message.type !== 'pointer'
+  return message.type !== 'pointer' &&
+    !(message.type === 'caption.transcript' && !message.is_final)
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -95,6 +95,10 @@ final class LiveKitTransport: NSObject, RoomDelegate, @unchecked Sendable {
         try await room.localParticipant.publish(data: data, options: DataPublishOptions(reliable: reliable))
     }
 
+    func elderMicrophoneTrack() -> LocalAudioTrack {
+        audioTrack
+    }
+
     func disconnect() async {
         let task = withState {
             isConnected = false

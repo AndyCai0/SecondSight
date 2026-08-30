@@ -1,5 +1,10 @@
 import Foundation
 
+public enum CaptionSpeaker: String, Codable, Equatable, Hashable, Sendable {
+    case elder
+    case volunteer
+}
+
 public enum DataMessage: Equatable, Sendable {
     case circle(id: String, x: Double, y: Double, radius: Double, ttlMilliseconds: Int)
     case arrow(id: String, x1: Double, y1: Double, x2: Double, y2: Double, ttlMilliseconds: Int)
@@ -9,6 +14,7 @@ public enum DataMessage: Equatable, Sendable {
     case resume
     case textToSpeech(text: String)
     case safetyRisk(level: RiskLevel, transcript: String, matchedRules: [String])
+    case caption(speaker: CaptionSpeaker, turnOrder: Int, text: String, isFinal: Bool)
 
     public var type: String {
         switch self {
@@ -20,6 +26,7 @@ public enum DataMessage: Equatable, Sendable {
         case .resume: "control.resume"
         case .textToSpeech: "chat.tts"
         case .safetyRisk: "safety.risk"
+        case .caption: "caption.transcript"
         }
     }
 }
@@ -42,7 +49,7 @@ public enum DataMessageCodec {
         else { throw DataMessageError.invalidJSON }
         guard version == 1 else { throw DataMessageError.unsupportedVersion }
         if senderIdentity?.hasPrefix("volunteer:") == true,
-           type.hasPrefix("control.") || type == "safety.risk"
+           type.hasPrefix("control.") || type == "safety.risk" || type == "caption.transcript"
         {
             throw DataMessageError.forbiddenVolunteerControl
         }
@@ -108,6 +115,19 @@ public enum DataMessageCodec {
                 transcript: try text("transcript", maxLength: 1_000),
                 matchedRules: try riskRules()
             )
+        case "caption.transcript":
+            guard let speakerText = object["speaker"] as? String,
+                  let speaker = CaptionSpeaker(rawValue: speakerText),
+                  let turnOrder = object["turn_order"] as? Int,
+                  turnOrder >= 0,
+                  let isFinal = object["is_final"] as? Bool
+            else { throw DataMessageError.invalidValue }
+            return .caption(
+                speaker: speaker,
+                turnOrder: turnOrder,
+                text: try text("text", maxLength: 2_000),
+                isFinal: isFinal
+            )
         default:
             throw DataMessageError.unsupportedType
         }
@@ -138,6 +158,14 @@ public enum DataMessageCodec {
             if boundedTranscript.wasTruncated {
                 object["transcript_truncated"] = true
             }
+        case let .caption(speaker, turnOrder, text, isFinal):
+            guard turnOrder >= 0, !text.isEmpty, text.count <= 2_000 else {
+                throw DataMessageError.invalidValue
+            }
+            object["speaker"] = speaker.rawValue
+            object["turn_order"] = turnOrder
+            object["text"] = text
+            object["is_final"] = isFinal
         case .clear, .resume: break
         }
         return try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])

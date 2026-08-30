@@ -10,7 +10,7 @@
 1. LiveKit Cloud 免费项目 → 记下 `LIVEKIT_URL`、API key/secret。
 2. Supabase 项目 → 记下 URL、anon key。
 3. `supabase secrets set LIVEKIT_API_KEY=... LIVEKIT_API_SECRET=... LIVEKIT_URL=...`
-   `ANTHROPIC_API_KEY` 仅在启用 `ai-guide` / `ai-referee` 时单独配置。
+   `DEEPSEEK_API_KEY` 仅在启用 `ai-guide` / `ai-referee` 时单独配置。
 4. 把三个公开值填进 `docs/CONTRACT.md` §6，commit + push，通知 A。
 5. 给 A 开 LiveKit 控制台访问（A 需要手签测试 token）。
 
@@ -31,16 +31,16 @@
    更新 volunteer_label、status=active;签 token（identity=`volunteer:{name}`，
    `canPublishSources: ["microphone", "camera"]` —— 支持双向视频，但仍在 token
    层禁止志愿者发布屏幕，必须验证生效）→ 按契约返回。
-3. **ai-guide**:调 Claude API，model `claude-sonnet-5`，vision。
+3. **ai-guide**:调 DeepSeek API，model `deepseek-v4-flash-vision-exp`，vision。
    system prompt 要点:你在指导不熟悉电脑的中国老人;一次只给一步;
    `instruction_text` 必须是口语化中文短句;若提供 ax_summary 优先用其坐标;
    输出严格 JSON `{instruction_text, target_rect|null, confidence}`
-   （target_rect 归一化 0–1，基于传入截图）。落 session_events 后透传。
-4. **ai-referee**:调 Claude API，model `claude-haiku-4-5-20251001`，纯文本。
-   分类志愿者话语:(a)索要密码/验证码/PIN → freeze;(b)诱导转账/汇款/礼品卡
-   → freeze;(c)诱导装软件/访问陌生网址 → warn;(d)高压催促 → warn;
-   否则 ok。返回 `{verdict, reason}`。verdict≠ok 时插 alerts、
-   freeze 时更新 sessions.status。目标端到端 < 2s。
+   （target_rect 归一化 0–1，基于传入截图）。必须校验老人 LiveKit room 凭证；截图和
+   原始任务不落库，session_events 只记录返回的指令、矩形和置信度。
+4. **ai-referee**:接收老人目标、带说话人标签的滚动 final 对话和可选打码截图。
+   无截图用 `deepseek-v4-flash`，有明显画面变化时用
+   `deepseek-v4-flash-vision-exp`；返回 `{level, category, reason, through_sequence}`。
+   warning/danger 写 alerts，但不自动冻结 session；请求必须校验老人 LiveKit room 凭证。
 5. **log-event**:插 session_events，返回 `{ok:true}`。
 
 用 `supabase functions deploy` 部署;每个 function 写一条可复制的 curl
@@ -64,6 +64,8 @@ React + Vite + TypeScript + `livekit-client`。单页，无路由，桌面浏览
   - 每条标注 fire-and-forget POST `log-event`。
   - 收到 `control.freeze` → 全屏遮罩"会话已被 AI 安全助手暂停";
     `control.resume` → 解除。
+  - 收到 `caption.transcript` → 以 `speaker + turn_order` 实时替换 partial/final，显示老人和
+    志愿者双方最近字幕。
   - 固定文案（醒目位置）:"你只能看和指，操作永远由长辈本人完成"。
     界面上不得出现任何形似远程控制的元素。
 - **alerts 展示页**（demo 用，可简陋）:`/alerts.html` 或页内面板，

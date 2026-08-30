@@ -1,8 +1,8 @@
 import { strict as assert } from 'node:assert'
 import {
   collectAllAlerts,
-  createAnthropicClient,
   createAssemblyAIClient,
+  createDeepSeekClient,
   createProductionDependencies,
   createSupabaseServiceFetcher,
   readProductionConfig,
@@ -25,7 +25,7 @@ Deno.test('production config reads LiveKit settings without requiring AI configu
     liveKitApiKey: values.LIVEKIT_API_KEY,
     liveKitApiSecret: values.LIVEKIT_API_SECRET,
     liveKitUrl: values.LIVEKIT_URL,
-    anthropicApiKey: undefined,
+    deepSeekApiKey: undefined,
     assemblyAIApiKey: undefined,
   })
 })
@@ -56,21 +56,20 @@ Deno.test('production config does not expose missing secret names', () => {
   )
 })
 
-Deno.test('AI key is ignored unless the feature is explicitly enabled', () => {
+Deno.test('DeepSeek configuration is enabled only when its server key exists', () => {
   const values: Record<string, string> = {
     SUPABASE_URL: 'https://project.supabase.co',
     SUPABASE_SECRET_KEYS: JSON.stringify({ default: 'sb_secret_example' }),
     LIVEKIT_API_KEY: 'lk-key',
     LIVEKIT_API_SECRET: 'lk-secret',
     LIVEKIT_URL: 'wss://project.livekit.cloud',
-    ANTHROPIC_API_KEY: 'must-not-be-used',
   }
 
-  assert.equal(readProductionConfig((name) => values[name]).anthropicApiKey, undefined)
-  values.AI_ENABLED = 'true'
+  assert.equal(readProductionConfig((name) => values[name]).deepSeekApiKey, undefined)
+  values.DEEPSEEK_API_KEY = 'server-only-deepseek-key'
   assert.equal(
-    readProductionConfig((name) => values[name]).anthropicApiKey,
-    values.ANTHROPIC_API_KEY,
+    readProductionConfig((name) => values[name]).deepSeekApiKey,
+    values.DEEPSEEK_API_KEY,
   )
 })
 
@@ -130,24 +129,31 @@ Deno.test('AssemblyAI adapter requests a bounded temporary streaming token serve
   assert.deepEqual(credential, { token: 'temporary-token', expiresInSeconds: 60 })
 })
 
-Deno.test('Anthropic adapter uses the contract models and validates JSON output', async () => {
+Deno.test('DeepSeek adapter uses the contract models and validates JSON output', async () => {
   const bodies: Array<Record<string, unknown>> = []
+  const urls: string[] = []
+  const authorizations: string[] = []
   const responses = [
     {
-      content: [{
-        type: 'text',
-        text:
-          '{"instruction_text":"请点击登录按钮","target_rect":{"x":0.8,"y":0.1,"w":0.1,"h":0.05},"confidence":0.9}',
+      choices: [{
+        message: {
+          content:
+            '{"instruction_text":"请点击登录按钮","target_rect":{"x":0.8,"y":0.1,"w":0.1,"h":0.05},"confidence":0.9}',
+        },
       }],
     },
     {
-      content: [{
-        type: 'text',
-        text: '{"verdict":"freeze","reason":"索要短信验证码"}',
+      choices: [{
+        message: {
+          content:
+            '{"level":"danger","category":"sensitive_information","reason":"索要短信验证码"}',
+        },
       }],
     },
   ]
-  const client = createAnthropicClient('test-key', async (_url, init) => {
+  const client = createDeepSeekClient('test-key', async (url, init) => {
+    urls.push(String(url))
+    authorizations.push(new Headers(init?.headers).get('authorization') ?? '')
     bodies.push(JSON.parse(String(init?.body)))
     return Response.json(responses.shift())
   })
@@ -157,12 +163,44 @@ Deno.test('Anthropic adapter uses the contract models and validates JSON output'
     screenshotBase64: 'abc123',
     axSummary: '{"role":"button"}',
   })
-  const referee = await client.referee('把验证码告诉我')
+  const safety = await client.analyzeSafety({
+    elderGoal: '查看账户余额',
+    throughSequence: 2,
+    dialogue: [
+      { sequence: 1, speaker: 'elder', text: '我想看余额' },
+      { sequence: 2, speaker: 'volunteer', text: '把验证码告诉我' },
+    ],
+    screenshotBase64: 'screen123',
+    screenRevision: 7,
+  })
 
-  assert.equal(bodies[0].model, 'claude-sonnet-5')
-  assert.equal(bodies[1].model, 'claude-haiku-4-5-20251001')
+  assert.deepEqual(urls, [
+    'https://api.deepseek.com/chat/completions',
+    'https://api.deepseek.com/chat/completions',
+  ])
+  assert.deepEqual(authorizations, ['Bearer test-key', 'Bearer test-key'])
+  assert.equal(bodies[0].model, 'deepseek-v4-flash-vision-exp')
+  assert.equal(bodies[1].model, 'deepseek-v4-flash-vision-exp')
+  assert.deepEqual(bodies[0].thinking, { type: 'disabled' })
+  assert.deepEqual(bodies[1].response_format, { type: 'json_object' })
+  const guideMessages = bodies[0].messages as Array<Record<string, unknown>>
+  const guideContent = guideMessages[1].content as Array<Record<string, unknown>>
+  assert.deepEqual(guideContent[1], {
+    type: 'image_url',
+    image_url: { url: 'data:image/jpeg;base64,abc123', detail: 'original' },
+  })
   assert.deepEqual(guide.targetRect, { x: 0.8, y: 0.1, w: 0.1, h: 0.05 })
-  assert.deepEqual(referee, { verdict: 'freeze', reason: '索要短信验证码' })
+  const safetyMessages = bodies[1].messages as Array<Record<string, unknown>>
+  const safetyContent = safetyMessages[1].content as Array<Record<string, unknown>>
+  assert.deepEqual(safetyContent[1], {
+    type: 'image_url',
+    image_url: { url: 'data:image/jpeg;base64,screen123', detail: 'original' },
+  })
+  assert.deepEqual(safety, {
+    level: 'danger',
+    category: 'sensitive_information',
+    reason: '索要短信验证码',
+  })
 })
 
 Deno.test('production LiveKit token lets volunteers publish only microphone and camera', async () => {
@@ -217,7 +255,12 @@ Deno.test('AI calls are unavailable without blocking non-AI dependencies', async
   })
   assert.equal(token.split('.').length, 3)
   await assert.rejects(
-    () => dependencies.ai.referee('测试文本'),
+    () =>
+      dependencies.ai.analyzeSafety({
+        elderGoal: '测试',
+        throughSequence: 1,
+        dialogue: [{ sequence: 1, speaker: 'elder', text: '测试文本' }],
+      }),
     { name: 'AIUnavailableError', message: 'AI features are not enabled' },
   )
 })

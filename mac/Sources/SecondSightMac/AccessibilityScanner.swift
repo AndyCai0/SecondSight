@@ -37,8 +37,13 @@ final class RedactionSnapshotStore: @unchecked Sendable {
 final class AccessibilityScanner: @unchecked Sendable {
     private static let interval = DispatchTimeInterval.milliseconds(200)
     private static let messagingTimeout: Float = 0.08
-    private static let maximumScanDurationNanoseconds: UInt64 = 140_000_000
-    private static let maximumVisitedElements = 750
+    // A protected display can legitimately contain two visible Safari
+    // windows from one process. The previous 140 ms budget repeatedly stopped
+    // around 280 nodes and paused every frame even though the scan was making
+    // healthy progress. Keep the pass bounded, but allow the precise leaf
+    // scan to finish instead of falling back to an unusable black/stale view.
+    private static let maximumScanDurationNanoseconds: UInt64 = 280_000_000
+    private static let maximumVisitedElements = 1_000
     private static let maximumDepth = 10
 
     let store: RedactionSnapshotStore
@@ -48,10 +53,12 @@ final class AccessibilityScanner: @unchecked Sendable {
     private var focusedApplicationObserver: AXObserver?
     private var observedProcessID: pid_t?
     private var workspaceActivationObserver: NSObjectProtocol?
+    private var protectedDisplayFramePoints = CGRect.zero
 
     private struct SummaryNode {
         var payload: [String: Any]
         let frame: CGRect?
+        let privacyProtected: Bool
     }
 
     private static let observerCallback: AXObserverCallback = { _, _, _, refcon in
@@ -62,6 +69,12 @@ final class AccessibilityScanner: @unchecked Sendable {
 
     init(store: RedactionSnapshotStore = RedactionSnapshotStore()) {
         self.store = store
+    }
+
+    func protect(displayFramePoints: CGRect) {
+        queue.sync {
+            protectedDisplayFramePoints = displayFramePoints.standardized
+        }
     }
 
     func start() {
@@ -110,87 +123,118 @@ final class AccessibilityScanner: @unchecked Sendable {
         }
     }
 
+    private struct VisibleWindow {
+        let processID: pid_t
+        let frame: CGRect
+        let visibleRegions: [CGRect]
+    }
+
     private func scan() {
         let secureInput = IsSecureEventInputEnabled()
-        guard AXIsProcessTrusted() else {
-            store.update(RedactionSnapshot(
-                axRects: [],
-                secureInputEnabled: secureInput,
-                protectionUnavailable: true,
-                axSummary: nil
-            ))
+        let isTrusted = AXIsProcessTrusted()
+        let displayReady = !protectedDisplayFramePoints.isNull && !protectedDisplayFramePoints.isEmpty
+        let visibleWindows = displayReady ? visibleWindowsOnProtectedDisplay() : nil
+        guard isTrusted,
+              displayReady,
+              let visibleWindows
+        else {
+            publishUnavailable(secureInput: secureInput)
             return
         }
 
         let system = AXUIElementCreateSystemWide()
-        // A changing or unresponsive target app must not leave this 5 Hz source
-        // blocked with stale AX proxies. This timeout is process-global and is
-        // reset in stop().
         AXUIElementSetMessagingTimeout(system, Self.messagingTimeout)
-        guard let app = elementAttribute(system, kAXFocusedApplicationAttribute as CFString) else {
-            store.update(RedactionSnapshot(
-                axRects: [],
-                secureInputEnabled: secureInput,
-                protectionUnavailable: true,
-                axSummary: nil
-            ))
-            return
+        if let focusedApplication = elementAttribute(system, kAXFocusedApplicationAttribute as CFString) {
+            refreshFocusedApplicationObserver(for: focusedApplication)
         }
-        refreshFocusedApplicationObserver(for: app)
+
         let deadline = DispatchTime.now().uptimeNanoseconds + Self.maximumScanDurationNanoseconds
-        var roots: [AXUIElement] = []
-        let focusedElement = elementAttribute(app, kAXFocusedUIElementAttribute as CFString)
-        if let focusedElement {
-            roots.append(focusedElement)
-        }
-        if let focusedWindow = elementAttribute(app, kAXFocusedWindowAttribute as CFString),
-           !roots.contains(where: { CFEqual($0, focusedWindow) }) {
-            roots.append(focusedWindow)
-        }
-        for window in elementArrayAttribute(app, kAXWindowsAttribute as CFString).prefix(4)
-        where !roots.contains(where: { CFEqual($0, window) }) {
-            roots.append(window)
-        }
         var rects: [CGRect] = []
         var suggestionSurfaceRects: [CGRect] = []
         var focusedInputFrame: CGRect?
         var summaryNodes: [SummaryNode] = []
+        var unframedSensitiveContent = false
+        var unavailableWindow = false
         var visited = 0
         var seen: [CFHashCode: [AXUIElement]] = [:]
-        for root in roots {
-            walk(
-                root,
-                depth: 0,
-                focusedElement: focusedElement,
-                deadline: deadline,
-                visited: &visited,
-                seen: &seen,
-                rects: &rects,
-                suggestionSurfaceRects: &suggestionSurfaceRects,
-                focusedInputFrame: &focusedInputFrame,
-                summary: &summaryNodes
-            )
-            if scanLimitReached(visited: visited, deadline: deadline) { break }
+
+        var processOrder: [pid_t] = []
+        for visibleWindow in visibleWindows where !processOrder.contains(visibleWindow.processID) {
+            processOrder.append(visibleWindow.processID)
         }
+
+        for processID in processOrder {
+            guard !scanLimitReached(visited: visited, deadline: deadline) else { break }
+            let descriptors = visibleWindows.filter { $0.processID == processID }
+            let application = AXUIElementCreateApplication(processID)
+            AXUIElementSetMessagingTimeout(application, Self.messagingTimeout)
+            let applicationWindows = elementArrayAttribute(application, kAXWindowsAttribute as CFString)
+            let matchedWindows = applicationWindows.filter { window in
+                guard let frame = elementFrame(window) else { return false }
+                return descriptors.contains { framesOverlapForSameWindow(frame, $0.frame) }
+            }
+            guard !matchedWindows.isEmpty else {
+                // Do not replace the display with a full-screen mask. The frame
+                // publisher pauses and keeps the last already-redacted frame
+                // until this visible window becomes inspectable again.
+                unavailableWindow = true
+                break
+            }
+
+            let runningApplication = NSRunningApplication(processIdentifier: processID)
+            let focusedElement = elementAttribute(application, kAXFocusedUIElementAttribute as CFString)
+            for window in matchedWindows {
+                guard let windowFrame = elementFrame(window) else {
+                    unavailableWindow = true
+                    break
+                }
+                let visibleRegions = descriptors
+                    .filter { framesOverlapForSameWindow(windowFrame, $0.frame) }
+                    .flatMap(\.visibleRegions)
+                let privateContext = StaticPrivacyPolicy.isPrivateContext(
+                    applicationName: runningApplication?.localizedName,
+                    bundleIdentifier: runningApplication?.bundleIdentifier,
+                    windowTitle: stringAttribute(window, kAXTitleAttribute as CFString)
+                )
+                walk(
+                    window,
+                    depth: 0,
+                    focusedElement: focusedElement,
+                    privateContext: privateContext,
+                    visibleRegions: visibleRegions,
+                    deadline: deadline,
+                    visited: &visited,
+                    seen: &seen,
+                    rects: &rects,
+                    suggestionSurfaceRects: &suggestionSurfaceRects,
+                    focusedInputFrame: &focusedInputFrame,
+                    unframedSensitiveContent: &unframedSensitiveContent,
+                    summary: &summaryNodes
+                )
+                if scanLimitReached(visited: visited, deadline: deadline) { break }
+            }
+        }
+
         if let focusedInputFrame {
             let nearbySuggestionSurfaces = suggestionSurfaceRects.filter {
                 InputPrivacyPolicy.shouldRedactSuggestionSurface($0, near: focusedInputFrame)
             }
             if nearbySuggestionSurfaces.isEmpty {
-                // A system password/autofill panel can be composited by a
-                // different process and therefore absent from the focused
-                // application's AX tree. Protect its normal anchor area until
-                // a concrete surface becomes available.
                 rects.append(InputPrivacyPolicy.fallbackSuggestionFrame(under: focusedInputFrame))
             } else {
                 rects.append(contentsOf: nearbySuggestionSurfaces)
             }
         }
+
+        let scanIncomplete = scanLimitReached(visited: visited, deadline: deadline)
+        let protectionUnavailable = unavailableWindow || unframedSensitiveContent || scanIncomplete
+            || (secureInput && rects.isEmpty)
         let redactionRects = Self.deduplicated(rects)
         let safeSummary = summaryNodes.map { summaryNode in
             var payload = summaryNode.payload
-            if let frame = summaryNode.frame,
-               redactionRects.contains(where: { $0.intersects(frame) }) {
+            if summaryNode.privacyProtected || (summaryNode.frame.map { frame in
+                redactionRects.contains(where: { $0.intersects(frame) })
+            } ?? false) {
                 payload.removeValue(forKey: "title")
                 payload["privacy_protected"] = true
             }
@@ -200,8 +244,8 @@ final class AccessibilityScanner: @unchecked Sendable {
         store.update(RedactionSnapshot(
             axRects: redactionRects,
             secureInputEnabled: secureInput,
-            protectionUnavailable: false,
-            axSummary: summary
+            protectionUnavailable: protectionUnavailable,
+            axSummary: protectionUnavailable ? nil : summary
         ))
     }
 
@@ -209,12 +253,15 @@ final class AccessibilityScanner: @unchecked Sendable {
         _ element: AXUIElement,
         depth: Int,
         focusedElement: AXUIElement?,
+        privateContext: Bool,
+        visibleRegions: [CGRect],
         deadline: UInt64,
         visited: inout Int,
         seen: inout [CFHashCode: [AXUIElement]],
         rects: inout [CGRect],
         suggestionSurfaceRects: inout [CGRect],
         focusedInputFrame: inout CGRect?,
+        unframedSensitiveContent: inout Bool,
         summary: inout [SummaryNode]
     ) {
         guard depth <= Self.maximumDepth,
@@ -225,6 +272,10 @@ final class AccessibilityScanner: @unchecked Sendable {
         seen[elementHash, default: []].append(element)
         visited += 1
         guard let attributes = elementAttributes(element) else { return }
+        if let frame = attributes.frame,
+           !visibleRegions.contains(where: { $0.intersects(frame) }) {
+            return
+        }
         let role = attributes.role
         let subrole = attributes.subrole
         let titleParts = [attributes.title, attributes.description, attributes.placeholder].compactMap { $0 }
@@ -247,6 +298,29 @@ final class AccessibilityScanner: @unchecked Sendable {
         if shouldRedactInput, let frame {
             rects.append(frame)
         }
+        let visibleStaticText = isEditable
+            ? label
+            : (titleParts + [attributes.value].compactMap { $0 }).joined(separator: " ")
+        let shouldRedactStaticText = !isEditable
+            && StaticPrivacyPolicy.mayDirectlyRedactSensitiveText(
+                role: role,
+                hasChildren: !attributes.children.isEmpty
+            )
+            && StaticPrivacyPolicy.containsSensitiveContent(visibleStaticText)
+        let shouldRedactSensitiveVisual = role == (kAXImageRole as String)
+            && StaticPrivacyPolicy.containsSensitiveVisualDescription(visibleStaticText)
+        let shouldRedactPrivateContent = StaticPrivacyPolicy.shouldRedactElement(
+            role: role,
+            hasChildren: !attributes.children.isEmpty,
+            inPrivateContext: privateContext
+        )
+        if shouldRedactStaticText || shouldRedactSensitiveVisual || shouldRedactPrivateContent {
+            if let frame {
+                rects.append(frame)
+            } else {
+                unframedSensitiveContent = true
+            }
+        }
         if isEditable, isFocused, let frame {
             focusedInputFrame = frame
         }
@@ -257,24 +331,32 @@ final class AccessibilityScanner: @unchecked Sendable {
         if depth <= 4, summary.count < 350 {
             var node: [String: Any] = ["role": role]
             if !subrole.isEmpty { node["subrole"] = subrole }
-            if !label.isEmpty { node["title"] = String(label.prefix(300)) }
+            if !visibleStaticText.isEmpty { node["title"] = String(visibleStaticText.prefix(300)) }
             if let frame {
                 node["frame"] = ["x": frame.minX, "y": frame.minY, "w": frame.width, "h": frame.height]
             }
             node["depth"] = depth
-            summary.append(SummaryNode(payload: node, frame: frame))
+            summary.append(SummaryNode(
+                payload: node,
+                frame: frame,
+                privacyProtected: shouldRedactInput || shouldRedactStaticText
+                    || shouldRedactSensitiveVisual || shouldRedactPrivateContent
+            ))
         }
         for child in attributes.children {
             walk(
                 child,
                 depth: depth + 1,
                 focusedElement: focusedElement,
+                privateContext: privateContext,
+                visibleRegions: visibleRegions,
                 deadline: deadline,
                 visited: &visited,
                 seen: &seen,
                 rects: &rects,
                 suggestionSurfaceRects: &suggestionSurfaceRects,
                 focusedInputFrame: &focusedInputFrame,
+                unframedSensitiveContent: &unframedSensitiveContent,
                 summary: &summary
             )
             if scanLimitReached(visited: visited, deadline: deadline) { return }
@@ -291,6 +373,7 @@ final class AccessibilityScanner: @unchecked Sendable {
         let title: String?
         let description: String?
         let placeholder: String?
+        let value: String?
         let frame: CGRect?
         let isFocused: Bool
         let isEditable: Bool
@@ -304,6 +387,7 @@ final class AccessibilityScanner: @unchecked Sendable {
             kAXTitleAttribute as CFString,
             kAXDescriptionAttribute as CFString,
             "AXPlaceholderValue" as CFString,
+            kAXValueAttribute as CFString,
             kAXPositionAttribute as CFString,
             kAXSizeAttribute as CFString,
             kAXVisibleChildrenAttribute as CFString,
@@ -322,16 +406,17 @@ final class AccessibilityScanner: @unchecked Sendable {
               values.count == names.count
         else { return nil }
 
-        let visibleChildren = values[7] as? [AXUIElement]
+        let visibleChildren = values[8] as? [AXUIElement]
         return ElementAttributes(
             role: values[0] as? String ?? "",
             subrole: values[1] as? String ?? "",
             title: values[2] as? String,
             description: values[3] as? String,
             placeholder: values[4] as? String,
-            frame: frame(positionValue: values[5], sizeValue: values[6]),
-            isFocused: booleanValue(values[8]),
-            isEditable: booleanValue(values[9]),
+            value: stringValue(values[5]),
+            frame: frame(positionValue: values[6], sizeValue: values[7]),
+            isFocused: booleanValue(values[9]),
+            isEditable: booleanValue(values[10]),
             // Some accessibility providers do not implement AXVisibleChildren.
             // Fall back only when it is unsupported, not when it is a valid
             // empty array, so off-screen virtualized nodes stay out of the walk.
@@ -352,6 +437,108 @@ final class AccessibilityScanner: @unchecked Sendable {
 
     private func booleanValue(_ value: Any) -> Bool {
         (value as? NSNumber)?.boolValue ?? false
+    }
+
+    private func stringValue(_ value: Any) -> String? {
+        if let value = value as? String { return value }
+        if let value = value as? NSAttributedString { return value.string }
+        return nil
+    }
+
+    private func visibleWindowsOnProtectedDisplay() -> [VisibleWindow]? {
+        guard let windowInfo = CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly, .excludeDesktopElements],
+            kCGNullWindowID
+        ) as? [[CFString: Any]] else { return nil }
+        var coveredRegions: [CGRect] = []
+        var result: [VisibleWindow] = []
+        for info in windowInfo {
+            guard let processID = (info[kCGWindowOwnerPID] as? NSNumber)?.int32Value,
+                  processID > 0,
+                  processID != getpid(),
+                  (info[kCGWindowLayer] as? NSNumber)?.intValue == 0,
+                  (info[kCGWindowAlpha] as? NSNumber)?.doubleValue ?? 1 > 0,
+                  let rawBounds = info[kCGWindowBounds] as? NSDictionary,
+                  let bounds = CGRect(dictionaryRepresentation: rawBounds),
+                  bounds.width > 1,
+                  bounds.height > 1,
+                  bounds.intersects(protectedDisplayFramePoints)
+            else { continue }
+            let runningApplication = NSRunningApplication(processIdentifier: processID)
+            guard !CapturePrivacyPolicy.shouldExcludeApplication(
+                bundleIdentifier: runningApplication?.bundleIdentifier
+            ) else { continue }
+            let clipped = bounds.intersection(protectedDisplayFramePoints)
+            let visibleRegions = coveredRegions.reduce([clipped]) { regions, cover in
+                regions.flatMap { subtract(cover, from: $0) }
+            }
+            guard !visibleRegions.isEmpty else { continue }
+            result.append(VisibleWindow(
+                processID: processID,
+                frame: bounds,
+                visibleRegions: visibleRegions
+            ))
+            if ((info[kCGWindowAlpha] as? NSNumber)?.doubleValue ?? 1) >= 0.99 {
+                coveredRegions.append(clipped)
+            }
+        }
+        return result
+    }
+
+    private func subtract(_ cover: CGRect, from source: CGRect) -> [CGRect] {
+        let intersection = source.intersection(cover)
+        guard !intersection.isNull, !intersection.isEmpty else { return [source] }
+        guard intersection != source else { return [] }
+        var pieces: [CGRect] = []
+        if source.minY < intersection.minY {
+            pieces.append(CGRect(
+                x: source.minX,
+                y: source.minY,
+                width: source.width,
+                height: intersection.minY - source.minY
+            ))
+        }
+        if intersection.maxY < source.maxY {
+            pieces.append(CGRect(
+                x: source.minX,
+                y: intersection.maxY,
+                width: source.width,
+                height: source.maxY - intersection.maxY
+            ))
+        }
+        let middleMinY = max(source.minY, intersection.minY)
+        let middleMaxY = min(source.maxY, intersection.maxY)
+        if source.minX < intersection.minX, middleMinY < middleMaxY {
+            pieces.append(CGRect(
+                x: source.minX,
+                y: middleMinY,
+                width: intersection.minX - source.minX,
+                height: middleMaxY - middleMinY
+            ))
+        }
+        if intersection.maxX < source.maxX, middleMinY < middleMaxY {
+            pieces.append(CGRect(
+                x: intersection.maxX,
+                y: middleMinY,
+                width: source.maxX - intersection.maxX,
+                height: middleMaxY - middleMinY
+            ))
+        }
+        return pieces.filter { !$0.isEmpty && !$0.isNull }
+    }
+
+    private func framesOverlapForSameWindow(_ accessibilityFrame: CGRect, _ compositorFrame: CGRect) -> Bool {
+        let tolerance: CGFloat = 16
+        return accessibilityFrame.insetBy(dx: -tolerance, dy: -tolerance).intersects(compositorFrame)
+    }
+
+    private func publishUnavailable(secureInput: Bool) {
+        store.update(RedactionSnapshot(
+            axRects: [],
+            secureInputEnabled: secureInput,
+            protectionUnavailable: true,
+            axSummary: nil
+        ))
     }
 
     private static func deduplicated(_ rects: [CGRect]) -> [CGRect] {
@@ -439,6 +626,23 @@ final class AccessibilityScanner: @unchecked Sendable {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success else { return [] }
         return value as? [AXUIElement] ?? []
+    }
+
+    private func stringAttribute(_ element: AXUIElement, _ attribute: CFString) -> String? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success else { return nil }
+        return value as? String
+    }
+
+    private func elementFrame(_ element: AXUIElement) -> CGRect? {
+        var position: CFTypeRef?
+        var size: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &position) == .success,
+              AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &size) == .success,
+              let position,
+              let size
+        else { return nil }
+        return frame(positionValue: position, sizeValue: size)
     }
 
     private func frame(positionValue: Any, sizeValue: Any) -> CGRect? {

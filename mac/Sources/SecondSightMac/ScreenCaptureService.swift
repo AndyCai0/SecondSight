@@ -3,21 +3,31 @@ import CoreMedia
 import CoreVideo
 import Foundation
 import ScreenCaptureKit
+import SecondSightCore
 
 final class LatestFrameStore: @unchecked Sendable {
-    private let lock = NSLock()
-    private var frame: CVPixelBuffer?
+    struct Snapshot {
+        let frame: CVPixelBuffer
+        let axSummary: String?
+    }
 
-    func set(_ frame: CVPixelBuffer) {
-        lock.lock(); self.frame = frame; lock.unlock()
+    private let lock = NSLock()
+    private var snapshot: Snapshot?
+
+    func set(_ frame: CVPixelBuffer, axSummary: String?) {
+        lock.lock(); snapshot = Snapshot(frame: frame, axSummary: axSummary); lock.unlock()
     }
 
     func get() -> CVPixelBuffer? {
-        lock.lock(); defer { lock.unlock() }; return frame
+        lock.lock(); defer { lock.unlock() }; return snapshot?.frame
+    }
+
+    func getSnapshot() -> Snapshot? {
+        lock.lock(); defer { lock.unlock() }; return snapshot
     }
 
     func clear() {
-        lock.lock(); frame = nil; lock.unlock()
+        lock.lock(); snapshot = nil; lock.unlock()
     }
 }
 
@@ -28,6 +38,7 @@ final class ScreenCaptureService: NSObject, SCStreamOutput, SCStreamDelegate, @u
 
     private let scanner: AccessibilityScanner
     private let redactor = FrameRedactor()
+    private let visualPrivacyScanner = VisualPrivacyScanner()
     private let queue = DispatchQueue(label: "study.secondsight.screen-capture", qos: .userInteractive)
     private var stream: SCStream?
     private var displayFramePoints = CGRect.zero
@@ -45,12 +56,16 @@ final class ScreenCaptureService: NSObject, SCStreamOutput, SCStreamDelegate, @u
         guard let display = content.displays.first(where: { $0.displayID == mainID }) ?? content.displays.first else {
             throw CaptureError.noDisplay
         }
-        let bundleID = Bundle.main.bundleIdentifier
-        let excluded = content.windows.filter { window in
-            guard let bundleID else { return false }
-            return window.owningApplication?.bundleIdentifier == bundleID
+        let ownBundleID = Bundle.main.bundleIdentifier
+        let excludedApplications = content.applications.filter { application in
+            application.bundleIdentifier == ownBundleID
+                || CapturePrivacyPolicy.shouldExcludeApplication(bundleIdentifier: application.bundleIdentifier)
         }
-        let filter = SCContentFilter(display: display, excludingWindows: excluded)
+        let filter = SCContentFilter(
+            display: display,
+            excludingApplications: excludedApplications,
+            exceptingWindows: []
+        )
         let configuration = SCStreamConfiguration()
         configuration.width = display.width
         configuration.height = display.height
@@ -64,10 +79,12 @@ final class ScreenCaptureService: NSObject, SCStreamOutput, SCStreamDelegate, @u
             (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == display.displayID
         }?.frame.size ?? CGSize(width: display.width, height: display.height)
         displayFramePoints = CGRect(origin: .zero, size: logicalSize)
+        scanner.protect(displayFramePoints: displayFramePoints)
         let stream = SCStream(filter: filter, configuration: configuration, delegate: self)
         try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: queue)
         self.stream = stream
         scanner.start()
+        queue.sync { visualPrivacyScanner.reset() }
         queue.sync { isAcceptingFrames = true }
         do {
             try await stream.startCapture()
@@ -94,6 +111,7 @@ final class ScreenCaptureService: NSObject, SCStreamOutput, SCStreamDelegate, @u
             self.stream = nil
         }
         scanner.stop()
+        queue.sync { visualPrivacyScanner.reset() }
         latestFrame.clear()
     }
 
@@ -110,10 +128,38 @@ final class ScreenCaptureService: NSObject, SCStreamOutput, SCStreamDelegate, @u
         guard isAcceptingFrames,
               type == .screen,
               sampleBuffer.isValid,
-              let source = CMSampleBufferGetImageBuffer(sampleBuffer),
-              let output = redactor.redact(source: source, snapshot: scanner.store.current(), displayFramePoints: displayFramePoints)
+              let source = CMSampleBufferGetImageBuffer(sampleBuffer)
         else { return }
-        latestFrame.set(output)
+        let accessibilitySnapshot = scanner.store.current()
+        guard !accessibilitySnapshot.protectionUnavailable else {
+            return
+        }
+        let visualRects: [CGRect]
+        do {
+            visualRects = try visualPrivacyScanner.redactionRects(
+                for: source,
+                displayFramePoints: displayFramePoints
+            )
+        } catch {
+            return
+        }
+        let combinedSnapshot = RedactionSnapshot(
+            axRects: accessibilitySnapshot.axRects + visualRects,
+            secureInputEnabled: accessibilitySnapshot.secureInputEnabled,
+            protectionUnavailable: false,
+            axSummary: accessibilitySnapshot.axSummary
+        )
+        guard let output = redactor.redact(
+            source: source,
+            snapshot: combinedSnapshot,
+            displayFramePoints: displayFramePoints
+        ) else { return }
+        // AX summary nodes are already stripped for AX masks. A Vision-only
+        // face/barcode/OCR rectangle has no corresponding AX privacy flag, so
+        // omit the summary for this frame rather than reintroducing content
+        // through a side channel.
+        let safeAXSummary = visualRects.isEmpty ? accessibilitySnapshot.axSummary : nil
+        latestFrame.set(output, axSummary: safeAXSummary)
         onFrame?(output)
     }
 

@@ -505,6 +505,72 @@
   align-items: start;
 }
 
+.live-transcript-card {
+  margin-bottom: 1.25rem;
+  padding: 18px 20px;
+  border: 1px solid rgba(111, 226, 192, 0.24);
+  border-radius: 18px;
+  background: rgba(14, 32, 29, 0.92);
+}
+
+.live-transcript-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+}
+
+.live-transcript-heading h2 {
+  margin: 3px 0 0;
+  color: var(--ink);
+  font-family: Georgia, "Noto Serif SC", serif;
+  font-size: 24px;
+  font-weight: 500;
+}
+
+.live-transcript-heading > span {
+  color: var(--mint);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.transcript-empty {
+  margin: 14px 0 2px;
+  color: var(--muted);
+}
+
+.transcript-lines {
+  display: grid;
+  gap: 8px;
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.transcript-lines li {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: baseline;
+  padding: 9px 12px;
+  border-radius: 10px;
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.transcript-lines li.partial {
+  opacity: 0.68;
+}
+
+.transcript-lines strong {
+  color: var(--mint);
+}
+
+.transcript-lines small {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
 .assist-surface {
   overflow: hidden;
   border: 1px solid var(--line);

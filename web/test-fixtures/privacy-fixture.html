@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SecondSight Synthetic Privacy Fixture</title>
+    <style>
+      :root { font-family: -apple-system, BlinkMacSystemFont, sans-serif; color: #18212b; background: #edf2f7; }
+      body { max-width: 1040px; margin: 0 auto; padding: 36px; }
+      h1 { margin: 0 0 8px; }
+      .notice { color: #506070; margin-bottom: 24px; }
+      .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+      article { background: white; border: 1px solid #ccd6e0; border-radius: 14px; padding: 18px; min-height: 155px; }
+      h2 { margin-top: 0; font-size: 18px; }
+      label { display: block; margin-top: 12px; font-weight: 600; }
+      input { box-sizing: border-box; width: 100%; margin-top: 6px; padding: 10px; font-size: 16px; }
+      .ordinary { color: #175c35; }
+      .document { display: flex; align-items: center; gap: 16px; }
+      .portrait { width: 86px; height: 104px; border-radius: 8px; background: linear-gradient(135deg, #f4a261, #264653); }
+      .qr { width: 92px; height: 92px; background: repeating-conic-gradient(#111 0 25%, #fff 0 50%) 0/18px 18px; }
+    </style>
+  </head>
+  <body>
+    <h1>SecondSight synthetic privacy test</h1>
+    <p class="notice">All people, identifiers, balances, and messages on this page are invented test data.</p>
+    <div class="grid">
+      <article>
+        <h2>Synthetic email</h2>
+        <p>From: demo.elder@example.test</p>
+        <p>Subject: Appointment reminder</p>
+        <p>Please bring the invented account statement to the fictional appointment.</p>
+      </article>
+      <article>
+        <h2>Synthetic banking</h2>
+        <p>Account number: 1234 5678 9012</p>
+        <p>BSB: 062-000</p>
+        <p>Balance: AUD $12,345.67</p>
+      </article>
+      <article>
+        <h2>Synthetic identity and health</h2>
+        <div class="document">
+          <div class="portrait" role="img" aria-label="Synthetic identity portrait"></div>
+          <div>
+            <p>Medicare number: 2123 45678 1</p>
+            <p>Date of birth: 1 January 1940</p>
+            <p>Diagnosis: synthetic condition</p>
+          </div>
+          <div class="qr" role="img" aria-label="Synthetic document QR code"></div>
+        </div>
+      </article>
+      <article>
+        <h2>Synthetic contact and input</h2>
+        <p>Phone: +61 412 345 678</p>
+        <p>Home address: 1 Example Street, Sydney NSW 2000</p>
+        <label>Password <input type="password" value="DemoPass!" /></label>
+        <label>Verification code <input value="123456" /></label>
+      </article>
+      <article>
+        <h2>Ordinary controls should remain visible</h2>
+        <p class="ordinary">Click the blue Continue button to proceed with the tutorial.</p>
+        <button type="button">Continue</button>
+      </article>
+    </div>
+    <script>
+      if (new URLSearchParams(location.search).has("private-window")) {
+        document.title = "Synthetic Health Record - Patient Portal";
+      }
+    </script>
+  </body>
+</html>

@@ -73,6 +73,7 @@ describe('volunteer app', () => {
       '/alerts.html?session_id=session-1',
     )
     expect(screen.getByLabelText('Elder camera video')).toBeInTheDocument()
+    expect(screen.getByText('The elder and volunteer transcript will appear here as they speak.')).toBeInTheDocument()
     expect(session.attachMedia).toHaveBeenCalledWith(
       expect.any(HTMLVideoElement),
       expect.any(HTMLVideoElement),
@@ -84,6 +85,27 @@ describe('volunteer app', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('A request for a verification code was detected.')
 
     act(() => events?.onResume())
+    act(() => events?.onCaption({
+      v: 1,
+      type: 'caption.transcript',
+      speaker: 'volunteer',
+      turn_order: 4,
+      text: 'Please open Set',
+      is_final: false,
+    }))
+    expect(screen.getByText('Please open Set')).toBeInTheDocument()
+    expect(screen.getByText('listening…')).toBeInTheDocument()
+    act(() => events?.onCaption({
+      v: 1,
+      type: 'caption.transcript',
+      speaker: 'volunteer',
+      turn_order: 4,
+      text: 'Please open Settings',
+      is_final: true,
+    }))
+    expect(screen.queryByText('Please open Set')).not.toBeInTheDocument()
+    expect(screen.getByText('Please open Settings')).toBeInTheDocument()
+    expect(screen.queryByText('listening…')).not.toBeInTheDocument()
     act(() => events?.onRisk({
       v: 1,
       type: 'safety.risk',

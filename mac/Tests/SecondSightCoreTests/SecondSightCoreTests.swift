@@ -53,6 +53,29 @@ final class ContractTests: XCTestCase {
         XCTAssertEqual(credential.expiresInSeconds, 60)
         XCTAssertEqual(credential.maxSessionDurationSeconds, 3_600)
     }
+
+    func testSafetyAnalysisContractUsesSpeakerLabelledTurns() throws {
+        let sessionID = UUID(uuidString: "9D1D5434-6DA5-41E0-AF70-C5AA35C6816F")!
+        let request = AISafetyAnalysisRequest(
+            sessionID: sessionID,
+            elderGoal: "请帮我登录银行网站",
+            throughSequence: 2,
+            dialogue: [
+                .init(sequence: 1, speaker: .elder, text: "我想查看余额"),
+                .init(sequence: 2, speaker: .volunteer, text: "请告诉我验证码"),
+            ],
+            screenshotBase64: nil,
+            screenRevision: nil
+        )
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any]
+        )
+
+        XCTAssertEqual(object["elder_goal"] as? String, "请帮我登录银行网站")
+        XCTAssertEqual(object["through_sequence"] as? Int, 2)
+        let dialogue = try XCTUnwrap(object["dialogue"] as? [[String: Any]])
+        XCTAssertEqual(dialogue[1]["speaker"] as? String, "volunteer")
+    }
 }
 
 final class DataMessageTests: XCTestCase {
@@ -109,14 +132,131 @@ final class DataMessageTests: XCTestCase {
             XCTAssertEqual(error as? DataMessageError, .forbiddenVolunteerControl)
         }
     }
+
+    func testCaptionRoundTripsAndVolunteerCannotForgeIt() throws {
+        let message = DataMessage.caption(
+            speaker: .elder,
+            turnOrder: 4,
+            text: "我想打开照片",
+            isFinal: true
+        )
+        let data = try DataMessageCodec.encode(message)
+        XCTAssertEqual(try DataMessageCodec.decode(data, senderIdentity: "elder"), message)
+        XCTAssertThrowsError(try DataMessageCodec.decode(data, senderIdentity: "volunteer:小王")) { error in
+            XCTAssertEqual(error as? DataMessageError, .forbiddenVolunteerControl)
+        }
+    }
+}
+
+final class ScreenChangePolicyTests: XCTestCase {
+    func testFirstFrameIsSignificant() {
+        XCTAssertTrue(ScreenChangePolicy.isSignificant(previous: nil, current: [0, 0, 0]))
+    }
+
+    func testSmallLocalizedChangeIsIgnored() {
+        let previous = [UInt8](repeating: 100, count: 100 * 3)
+        var current = previous
+        current[0] = 220
+        current[1] = 220
+        current[2] = 220
+        XCTAssertFalse(ScreenChangePolicy.isSignificant(previous: previous, current: current))
+    }
+
+    func testLargeScreenChangeIsSignificant() {
+        let previous = [UInt8](repeating: 20, count: 100 * 3)
+        let current = [UInt8](repeating: 220, count: 100 * 3)
+        XCTAssertTrue(ScreenChangePolicy.isSignificant(previous: previous, current: current))
+    }
 }
 
 final class SecurityLogicTests: XCTestCase {
     func testSensitiveLabelsAndFallbackKeywords() {
         XCTAssertTrue(SensitiveTextPolicy.isSensitiveField(label: "Card CVV"))
         XCTAssertTrue(SensitiveTextPolicy.isSensitiveField(label: "输入密码"))
+        XCTAssertTrue(SensitiveTextPolicy.isSensitiveField(label: "BSB and account number"))
         XCTAssertNil(SensitiveTextPolicy.localFreezeReason(for: "请点击右上角"))
         XCTAssertNotNil(SensitiveTextPolicy.localFreezeReason(for: "把验证码念给我"))
+    }
+
+    func testSensitiveStaticTextPatternsAreProtected() {
+        XCTAssertTrue(StaticPrivacyPolicy.containsSensitiveContent("From: demo.elder@example.test"))
+        XCTAssertTrue(StaticPrivacyPolicy.containsSensitiveContent("Card 4111 1111 1111 1111"))
+        XCTAssertTrue(StaticPrivacyPolicy.containsSensitiveContent("Call +61 412 345 678"))
+        XCTAssertTrue(StaticPrivacyPolicy.containsSensitiveContent("Call 0412 345 678"))
+        XCTAssertTrue(StaticPrivacyPolicy.containsSensitiveContent("1 Example Street, Sydney NSW 2000"))
+        XCTAssertTrue(StaticPrivacyPolicy.containsSensitiveContent("Balance AUD $12,345.67"))
+        XCTAssertTrue(StaticPrivacyPolicy.containsSensitiveContent("Diagnosis: synthetic condition"))
+        XCTAssertTrue(StaticPrivacyPolicy.containsSensitiveContent("身份证号 110101199001011234"))
+        XCTAssertTrue(StaticPrivacyPolicy.containsSensitiveVisualDescription("Synthetic identity document"))
+        XCTAssertTrue(StaticPrivacyPolicy.containsSensitiveVisualDescription("医保卡二维码"))
+    }
+
+    func testOrdinaryStaticControlsRemainVisible() {
+        XCTAssertFalse(StaticPrivacyPolicy.containsSensitiveContent("Click the blue Continue button"))
+        XCTAssertFalse(StaticPrivacyPolicy.containsSensitiveContent("SecondSight volunteer session"))
+    }
+
+    func testAggregatePageTextCannotProduceAWholePageMask() {
+        XCTAssertFalse(StaticPrivacyPolicy.mayDirectlyRedactSensitiveText(
+            role: "AXWebArea",
+            hasChildren: true
+        ))
+        XCTAssertFalse(StaticPrivacyPolicy.mayDirectlyRedactSensitiveText(
+            role: "AXScrollArea",
+            hasChildren: true
+        ))
+        XCTAssertFalse(StaticPrivacyPolicy.mayDirectlyRedactSensitiveText(
+            role: "AXGroup",
+            hasChildren: true
+        ))
+        XCTAssertTrue(StaticPrivacyPolicy.mayDirectlyRedactSensitiveText(
+            role: "AXStaticText",
+            hasChildren: false
+        ))
+    }
+
+    func testPrivateContextsMaskContentNodesButNotWholeWindowControls() {
+        XCTAssertTrue(StaticPrivacyPolicy.isPrivateContext(
+            applicationName: "Mail",
+            bundleIdentifier: "com.apple.mail",
+            windowTitle: "Synthetic message"
+        ))
+        XCTAssertTrue(StaticPrivacyPolicy.isPrivateContext(
+            applicationName: "Safari",
+            bundleIdentifier: "com.apple.Safari",
+            windowTitle: "Inbox - Gmail"
+        ))
+        XCTAssertFalse(StaticPrivacyPolicy.isPrivateContext(
+            applicationName: "Safari",
+            bundleIdentifier: "com.apple.Safari",
+            windowTitle: "SecondSight Volunteer"
+        ))
+        XCTAssertTrue(StaticPrivacyPolicy.shouldRedactElement(
+            role: "AXStaticText",
+            hasChildren: false,
+            inPrivateContext: true
+        ))
+        XCTAssertTrue(StaticPrivacyPolicy.shouldRedactElement(
+            role: "AXImage",
+            hasChildren: false,
+            inPrivateContext: true
+        ))
+        XCTAssertFalse(StaticPrivacyPolicy.shouldRedactElement(
+            role: "AXButton",
+            hasChildren: false,
+            inPrivateContext: true
+        ))
+        XCTAssertFalse(StaticPrivacyPolicy.shouldRedactElement(
+            role: "AXWebArea",
+            hasChildren: true,
+            inPrivateContext: true
+        ))
+    }
+
+    func testSystemPrivacyOverlaysAreExcludedFromCapture() {
+        XCTAssertTrue(CapturePrivacyPolicy.shouldExcludeApplication(bundleIdentifier: "com.apple.notificationcenterui"))
+        XCTAssertTrue(CapturePrivacyPolicy.shouldExcludeApplication(bundleIdentifier: "com.apple.controlcenter"))
+        XCTAssertFalse(CapturePrivacyPolicy.shouldExcludeApplication(bundleIdentifier: "com.apple.Safari"))
     }
 
     func testCoordinateConversionIncludesRetinaScaleAndMargin() {
@@ -125,6 +265,17 @@ final class SecurityLogicTests: XCTestCase {
             frameSizePixels: CGSize(width: 2_880, height: 1_800)
         )
         XCTAssertEqual(geometry.pixelRect(forAXTopLeftRect: CGRect(x: 100, y: 50, width: 200, height: 40)), CGRect(x: 192, y: 92, width: 416, height: 96))
+    }
+
+    func testVisionBottomLeftCoordinatesConvertToTopLeftDisplayPoints() {
+        let converted = VisionPrivacyGeometry.topLeftRect(
+            forNormalizedBottomLeftRect: CGRect(x: 0.25, y: 0.6, width: 0.5, height: 0.2),
+            displayFramePoints: CGRect(x: 0, y: 0, width: 1_000, height: 800)
+        )
+        XCTAssertEqual(converted.minX, 250, accuracy: 0.001)
+        XCTAssertEqual(converted.minY, 160, accuracy: 0.001)
+        XCTAssertEqual(converted.width, 500, accuracy: 0.001)
+        XCTAssertEqual(converted.height, 160, accuracy: 0.001)
     }
 
     func testImageLongEdgeLimit() {
@@ -167,6 +318,13 @@ final class SecurityLogicTests: XCTestCase {
             reportsEditable: true,
             isFocused: true,
             hasNonEmptyValue: false
+        ))
+        XCTAssertFalse(InputPrivacyPolicy.shouldRedactEditable(
+            role: "AXWebArea",
+            subrole: "",
+            reportsEditable: true,
+            isFocused: true,
+            hasNonEmptyValue: true
         ))
     }
 

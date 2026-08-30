@@ -3,7 +3,7 @@
 The three database tables are private behind deny-by-default RLS. Browsers and the Mac app call the
 contract Edge Functions, broadcast discovery functions, and demo-only read-only `list-alerts`
 function with the project's public anonymous key; only the functions hold database and provider
-secrets. LiveKit is required for rooms and real-time media. Anthropic is optional and only enables
+secrets. LiveKit is required for rooms and real-time media. DeepSeek is optional and only enables
 the two AI endpoints. `assemblyai-token` returns a bounded, single-use streaming credential; it
 never returns the permanent API key.
 
@@ -37,10 +37,10 @@ reads its `default` key and also supports the legacy `SUPABASE_SERVICE_ROLE_KEY`
 older projects. Hosted functions use `SUPABASE_DB_URL` for server-only database operations when it
 is available, and retain a REST service-key fallback for local environments. Opaque `sb_secret_...`
 values are sent to PostgREST only through its `apikey` header. The local CLI injects its own
-`SUPABASE_*` values and skips attempts to override them in `functions/.env`. Unless both
-`AI_ENABLED=true` and `ANTHROPIC_API_KEY` are present, `ai-guide` and `ai-referee` return HTTP 503
-while room creation, joining, streaming safety, and LiveKit media remain available. Never put a
-server key or provider secret in `web/` or `docs/CONTRACT.md`.
+`SUPABASE_*` values and skips attempts to override them in `functions/.env`. Unless
+`DEEPSEEK_API_KEY` is present, `ai-guide` and `ai-referee` return HTTP 503 while room creation,
+joining, streaming safety, and LiveKit media remain available. Never put a server key or provider
+secret in `web/` or `docs/CONTRACT.md`.
 
 Local function serving additionally needs Docker and the Supabase CLI:
 
@@ -122,19 +122,30 @@ Ask for one AI guidance step (use a real redacted JPEG base64 payload for a live
 curl --fail-with-body "$SECOND_SIGHT_FUNCTIONS_URL/ai-guide" \
   -H "Authorization: Bearer $SECOND_SIGHT_ANON_KEY" \
   -H "apikey: $SECOND_SIGHT_ANON_KEY" \
+  -H "X-SecondSight-Elder-Token: $SECOND_SIGHT_ELDER_TOKEN" \
   -H 'Content-Type: application/json' \
   -d "{\"session_id\":\"$SECOND_SIGHT_SESSION_ID\",\"task\":\"请告诉我下一步\",\"screenshot_base64\":\"BASE64_JPEG\"}"
 ```
 
-Exercise the safety referee:
+The function verifies that this credential belongs to the elder in the requested room. It forwards
+the redacted screenshot and task for this one model request, but does not store either value; the
+audit event contains only the returned instruction, target rectangle, and confidence.
+
+Exercise the safety analysis endpoint. This requires the elder LiveKit token from `create-session`:
 
 ```bash
 curl --fail-with-body "$SECOND_SIGHT_FUNCTIONS_URL/ai-referee" \
   -H "Authorization: Bearer $SECOND_SIGHT_ANON_KEY" \
   -H "apikey: $SECOND_SIGHT_ANON_KEY" \
+  -H "X-SecondSight-Elder-Token: $SECOND_SIGHT_ELDER_TOKEN" \
   -H 'Content-Type: application/json' \
-  -d "{\"session_id\":\"$SECOND_SIGHT_SESSION_ID\",\"transcript\":\"把短信验证码告诉我\"}"
+  -d "{\"session_id\":\"$SECOND_SIGHT_SESSION_ID\",\"elder_goal\":\"帮我预约医生\",\"through_sequence\":2,\"dialogue\":[{\"sequence\":1,\"speaker\":\"elder\",\"text\":\"我想预约医生\"},{\"sequence\":2,\"speaker\":\"volunteer\",\"text\":\"把短信验证码告诉我\"}]}"
 ```
+
+The Mac calls this endpoint only for final AssemblyAI turns. It omits `screenshot_base64` when the
+redacted screen has not changed significantly; when present, `screen_revision` is a positive integer
+and the vision model is used. AI warnings are recorded and returned to the elder, but never freeze a
+session without the elder's action.
 
 Request a temporary AssemblyAI streaming credential:
 

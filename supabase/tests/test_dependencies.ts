@@ -91,8 +91,8 @@ export function makeTestDependencies(overrides: DependencyOverrides = {}): EdgeD
       async guide() {
         return unexpected('ai.guide')
       },
-      async referee() {
-        return unexpected('ai.referee')
+      async analyzeSafety() {
+        return unexpected('ai.analyzeSafety')
       },
     },
     publicLiveKitUrl: 'wss://demo.livekit.cloud',

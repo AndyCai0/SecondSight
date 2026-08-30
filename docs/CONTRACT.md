@@ -44,6 +44,8 @@ JSON，UTF-8，经 LiveKit `publishData`。坐标一律**归一化 0–1**，
 {"v":1,"type":"control.freeze","reason":"检测到索要验证码"}
 {"v":1,"type":"control.resume"}
 {"v":1,"type":"safety.risk","level":"danger","transcript":"Please tell me the verification code.","matched_rules":["request_sensitive_information","verification_code"]}
+{"v":1,"type":"caption.transcript","speaker":"elder","turn_order":3,"text":"我想预约医生","is_final":false}
+{"v":1,"type":"caption.transcript","speaker":"volunteer","turn_order":5,"text":"请点击预约按钮","is_final":true}
 ```
 
 `safety.risk.transcript` 最多传 1,000 个 Unicode scalar；老人端在发送前截断，
@@ -51,7 +53,9 @@ JSON，UTF-8，经 LiveKit `publishData`。坐标一律**归一化 0–1**，
 该可选字段并继续显示风险卡，不得因长字幕静默丢弃告警。
 
 安全规则（A 实现，B 知悉）:老人端**丢弃**任何来自 `volunteer:*` identity 的
-`control.*` 或 `safety.risk` 消息；`safety.risk` 只能由老人端发出。协议中永远不加入鼠标/键盘/控制类消息——需要新消息类型时走
+`control.*`、`safety.risk` 或 `caption.transcript` 消息；这些消息只能由老人端发出。
+`caption.transcript` 的 partial 使用 LOSSY，final 使用 RELIABLE；两路转写的 `turn_order`
+各自独立，Web 以 `speaker + turn_order` 替换同一条 partial/final。协议中永远不加入鼠标/键盘/控制类消息——需要新消息类型时走
 CONTRACT 修改流程。
 
 ## 4. Edge Function API（B 实现，A 调用）
@@ -69,6 +73,9 @@ Base URL:`{SUPABASE_URL}/functions/v1/`，Header:`Authorization: Bearer {SUPABAS
 错误:404 房间码不存在 / 409 已有志愿者接入 / 410 会话已结束 / 423 会话已冻结。
 
 ### 4.3 `POST ai-guide` — AI 引导（老人端调用）
+
+请求头：`X-SecondSight-Elder-Token: <create-session 返回的老人 LiveKit JWT>`
+
 请求:
 ```json
 {"session_id":"uuid","task":"我想在MyGov里查我的Medicare",
@@ -81,13 +88,38 @@ Base URL:`{SUPABASE_URL}/functions/v1/`，Header:`Authorization: Bearer {SUPABAS
  "target_rect":{"x":0.82,"y":0.05,"w":0.12,"h":0.04},
  "confidence":0.9}
 ```
-`target_rect` 可为 null（AI 不确定时只给语音指引）。坐标归一化，基于传入截图。
+`target_rect` 可为 null（AI 不确定时只给语音指引）。坐标归一化，基于传入截图。服务器
+必须校验 `identity=elder` 且 token 的 room 与 session 相符；截图和原始求助文字只用于
+本次模型请求，不写入数据库，审计事件仅保存模型给出的指令与坐标。
+AX 摘要必须与截图来自同一张已打码帧；只要该帧包含 Vision 补漏矩形，就省略摘要，避免
+OCR、人脸或条码已经在图像中遮挡却通过辅助功能文字旁路泄露。
 
-### 4.4 `POST ai-referee` — 裁判分类（老人端调用）
-请求:`{"session_id":"uuid","transcript":"把你手机上的验证码念给我听一下"}`
-响应:`{"verdict":"freeze","reason":"索要短信验证码"}`
-verdict ∈ `ok | warn | freeze`。目标延迟 < 2s（用 haiku）。
-该端点保留给旧版/手工测试；实时安全监听 v1 不逐句调用它。
+### 4.4 `POST ai-referee` — 对话与屏幕安全分析（老人端调用）
+
+请求头：`X-SecondSight-Elder-Token: <create-session 返回的老人 LiveKit JWT>`
+
+请求:
+```json
+{"session_id":"uuid","elder_goal":"帮我预约医生","through_sequence":2,
+ "dialogue":[
+   {"sequence":1,"speaker":"elder","text":"我想预约医生"},
+   {"sequence":2,"speaker":"volunteer","text":"把验证码念给我"}
+ ],
+ "screenshot_base64":"<可选，打码后的 JPEG>","screen_revision":7}
+```
+
+响应:
+```json
+{"level":"danger","category":"sensitive_information",
+ "reason":"志愿者正在索要短信验证码","through_sequence":2}
+```
+
+`level ∈ safe | warning | danger`。`category` 仅允许 `none`、
+`sensitive_information`、`financial_request`、`software_installation`、`unknown_link`、
+`pressure`、`goal_mismatch`、`screen_mismatch`、`other`。老人端只在 AssemblyAI
+`end_of_turn=true` 后调用，并通过 `through_sequence` 合并排队、丢弃过期响应；服务器
+校验老人 room 凭证。没有明显画面变化时省略截图和 `screen_revision`，使用文本模型；
+明显变化时才附打码截图并使用视觉模型。AI 结果只提醒，不自动冻结通话。
 
 ### 4.5 `POST log-event` — 通用审计（两端都可调，fire-and-forget）
 请求:`{"session_id":"uuid","actor":"volunteer","kind":"annotate.circle","payload":{...}}`
@@ -155,7 +187,7 @@ SUPABASE_URL      = <B 填>
 SUPABASE_ANON_KEY = <B 填>
 LIVEKIT_URL       = <B 填>
 ```
-Secrets（LIVEKIT_API_KEY/SECRET、可选的 ANTHROPIC_API_KEY、ASSEMBLYAI_API_KEY）
+Secrets（LIVEKIT_API_KEY/SECRET、可选的 DEEPSEEK_API_KEY、ASSEMBLYAI_API_KEY）
 只进 Supabase secrets，
 **永远不进本仓库、不进任何客户端**。
 

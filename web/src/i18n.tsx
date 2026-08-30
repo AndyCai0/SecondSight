@@ -111,6 +111,17 @@ export const messages = {
     zh: '请立即停止索要验证码、密码、付款信息或远程控制权限。',
   },
   dismiss: { en: 'Dismiss', zh: '关闭提醒' },
+  liveTranscriptKicker: { en: 'LIVE CONVERSATION', zh: '实时对话' },
+  liveTranscript: { en: 'Live Transcript', zh: '实时字幕' },
+  transcribing: { en: 'Transcribing', zh: '正在转写' },
+  waitingForSpeech: { en: 'Waiting for speech', zh: '等待说话' },
+  transcriptWaiting: {
+    en: 'The elder and volunteer transcript will appear here as they speak.',
+    zh: '老人和志愿者说话后，字幕会显示在这里。',
+  },
+  elderSpeaker: { en: 'Elder', zh: '老人' },
+  volunteerSpeaker: { en: 'Volunteer', zh: '志愿者' },
+  partialCaption: { en: 'listening…', zh: '正在听……' },
   faceToFace: { en: 'FACE-TO-FACE VIDEO', zh: '面对面视频' },
   elderCamera: { en: 'Elder Camera', zh: '老人摄像头' },
   videoConnected: { en: 'Video connected', zh: '视频已连接' },
@@ -203,6 +214,10 @@ export const messages = {
   mediaRequired: {
     en: 'Camera and microphone access are required to assist. Allow access, then try again.',
     zh: '协助需要摄像头和麦克风权限，请允许后重试。',
+  },
+  mediaUnavailable: {
+    en: 'The camera or microphone did not become available. Close other calls, then try again.',
+    zh: '摄像头或麦克风暂时不可用，请先关闭其他通话后重试。',
   },
   joinFailed: {
     en: 'Unable to join the room. Check your connection, then try again.',

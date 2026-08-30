@@ -2,9 +2,23 @@ import { strict as assert } from 'node:assert'
 import { handleEdgeRequest } from '../functions/_shared/handler.ts'
 import { makeTestDependencies } from './test_dependencies.ts'
 
+const sessionId = '9d1d5434-6da5-41e0-af70-c5aa35c6816f'
+
 Deno.test('ai-guide returns one normalized instruction and records the audit event', async () => {
   const events: Array<Record<string, unknown>> = []
   const deps = makeTestDependencies({
+    sessions: {
+      async findById(id) {
+        assert.equal(id, sessionId)
+        return { id, code: '482913', status: 'active' }
+      },
+    },
+    elderCredentials: {
+      async verify(token) {
+        assert.equal(token, 'elder-jwt')
+        return { identity: 'elder', room: '482913' }
+      },
+    },
     events: {
       async insert(input) {
         events.push(input)
@@ -30,9 +44,12 @@ Deno.test('ai-guide returns one normalized instruction and records the audit eve
     'ai-guide',
     new Request('http://localhost/ai-guide', {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: {
+        'content-type': 'application/json',
+        'x-secondsight-elder-token': 'elder-jwt',
+      },
       body: JSON.stringify({
-        session_id: 'session-1',
+        session_id: sessionId,
         task: '我想查 Medicare',
         screenshot_base64: 'jpeg-data',
         ax_summary: '{"role":"button"}',
@@ -49,7 +66,7 @@ Deno.test('ai-guide returns one normalized instruction and records the audit eve
   })
   assert.deepEqual(events, [
     {
-      sessionId: 'session-1',
+      sessionId,
       actor: 'ai_guide',
       kind: 'ai.instruction',
       payload: {
@@ -59,4 +76,51 @@ Deno.test('ai-guide returns one normalized instruction and records the audit eve
       },
     },
   ])
+})
+
+Deno.test('ai-guide rejects missing or mismatched elder room credentials before provider use', async () => {
+  const baseDependencies = {
+    sessions: {
+      async findById(id: string) {
+        return { id, code: '482913', status: 'active' as const }
+      },
+    },
+  }
+  const body = JSON.stringify({
+    session_id: sessionId,
+    task: '打开设置',
+    screenshot_base64: 'jpeg-data',
+  })
+
+  const missing = await handleEdgeRequest(
+    'ai-guide',
+    new Request('http://localhost/ai-guide', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body,
+    }),
+    makeTestDependencies(baseDependencies),
+  )
+  assert.equal(missing.status, 401)
+
+  const mismatched = await handleEdgeRequest(
+    'ai-guide',
+    new Request('http://localhost/ai-guide', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-secondsight-elder-token': 'volunteer-jwt',
+      },
+      body,
+    }),
+    makeTestDependencies({
+      ...baseDependencies,
+      elderCredentials: {
+        async verify() {
+          return { identity: 'volunteer:helper', room: '482913' }
+        },
+      },
+    }),
+  )
+  assert.equal(mismatched.status, 403)
 })

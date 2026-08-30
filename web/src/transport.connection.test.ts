@@ -44,6 +44,7 @@ vi.mock('livekit-client', () => ({
   RoomEvent: {
     DataReceived: 'dataReceived',
     Disconnected: 'disconnected',
+    ParticipantDisconnected: 'participantDisconnected',
     TrackSubscribed: 'trackSubscribed',
     TrackUnsubscribed: 'trackUnsubscribed',
   },
@@ -77,6 +78,7 @@ const events: LiveSessionEvents = {
   onDisconnected: vi.fn(),
   onMediaChanged: vi.fn(),
   onRisk: vi.fn(),
+  onCaption: vi.fn(),
 }
 
 function preparedMedia(): PreparedVolunteerMedia {
@@ -109,6 +111,36 @@ describe('volunteer media connection', () => {
     media.stop()
     expect(liveKit.cameraTrack.stop).toHaveBeenCalledOnce()
     expect(liveKit.microphoneTrack.stop).toHaveBeenCalledOnce()
+  })
+
+  it('can select a secondary camera for a same-Mac two-client test', async () => {
+    window.history.replaceState(null, '', '/?test_secondary_camera=1')
+    const originalMediaDevices = navigator.mediaDevices
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: {
+        enumerateDevices: vi.fn(async () => [
+          { deviceId: 'facetime', kind: 'videoinput' },
+          { deviceId: 'iphone', kind: 'videoinput' },
+          { deviceId: 'mac-mic', kind: 'audioinput' },
+          { deviceId: 'iphone-mic', kind: 'audioinput' },
+        ]),
+      },
+    })
+
+    try {
+      await acquireVolunteerMedia()
+      expect(liveKit.createLocalTracks).toHaveBeenCalledWith({
+        audio: { deviceId: { exact: 'iphone-mic' } },
+        video: { deviceId: { exact: 'iphone' } },
+      })
+    } finally {
+      window.history.replaceState(null, '', '/')
+      Object.defineProperty(navigator, 'mediaDevices', {
+        configurable: true,
+        value: originalMediaDevices,
+      })
+    }
   })
 
   it('publishes prepared tracks and exposes the local camera preview', async () => {
@@ -151,5 +183,19 @@ describe('volunteer media connection', () => {
     await expect(connectVolunteerSession(joined, events, media)).rejects.toThrow('publish failed')
     expect(media.stop).toHaveBeenCalledOnce()
     expect(liveKit.room.disconnect).toHaveBeenCalledWith(true)
+  })
+
+  it('disconnects and notifies when the elder leaves the room', async () => {
+    const media = preparedMedia()
+    await connectVolunteerSession(joined, events, media)
+    const participantDisconnected = liveKit.room.on.mock.calls.find(
+      ([event]) => event === 'participantDisconnected',
+    )?.[1] as ((participant: { identity: string }) => void) | undefined
+
+    expect(participantDisconnected).toBeTypeOf('function')
+    participantDisconnected?.({ identity: 'elder' })
+    await vi.waitFor(() => expect(liveKit.room.disconnect).toHaveBeenCalledWith(true))
+    await vi.waitFor(() => expect(events.onDisconnected).toHaveBeenCalledOnce())
+    expect(media.stop).toHaveBeenCalledOnce()
   })
 })

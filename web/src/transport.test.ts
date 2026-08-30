@@ -3,9 +3,20 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   dispatchElderMessage,
   elderVideoKind,
+  isLoopbackMediaTestHost,
   isSharedScreenTrack,
   publishContractMessage,
 } from './transport'
+
+describe('local media test boundary', () => {
+  it('accepts only loopback hostnames', () => {
+    expect(isLoopbackMediaTestHost('127.0.0.1')).toBe(true)
+    expect(isLoopbackMediaTestHost('localhost')).toBe(true)
+    expect(isLoopbackMediaTestHost('[::1]')).toBe(true)
+    expect(isLoopbackMediaTestHost('volunteer.example')).toBe(false)
+    expect(isLoopbackMediaTestHost('127.0.0.1.attacker.example')).toBe(false)
+  })
+})
 
 describe('LiveKit DataChannel publishing', () => {
   it('publishes pointer updates lossily and persistent annotations reliably', async () => {
@@ -63,6 +74,7 @@ describe('elder realtime messages', () => {
       onDisconnected: vi.fn(),
       onMediaChanged: vi.fn(),
       onRisk,
+      onCaption: vi.fn(),
     })
 
     expect(onRisk).toHaveBeenCalledWith({
@@ -71,6 +83,34 @@ describe('elder realtime messages', () => {
       level: 'danger',
       transcript: 'install AnyDesk so I can control your computer',
       matched_rules: ['anydesk', 'remote_control_request'],
+    })
+  })
+
+  it('dispatches live captions to the volunteer callback', () => {
+    const onCaption = vi.fn()
+    dispatchElderMessage(new TextEncoder().encode(JSON.stringify({
+      v: 1,
+      type: 'caption.transcript',
+      speaker: 'elder',
+      turn_order: 1,
+      text: 'I need help with photos',
+      is_final: true,
+    })), {
+      onFreeze: vi.fn(),
+      onResume: vi.fn(),
+      onDisconnected: vi.fn(),
+      onMediaChanged: vi.fn(),
+      onRisk: vi.fn(),
+      onCaption,
+    })
+
+    expect(onCaption).toHaveBeenCalledWith({
+      v: 1,
+      type: 'caption.transcript',
+      speaker: 'elder',
+      turn_order: 1,
+      text: 'I need help with photos',
+      is_final: true,
     })
   })
 })

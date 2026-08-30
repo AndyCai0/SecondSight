@@ -14,7 +14,7 @@ cp .env.example .env.local
 ```
 
 Fill only the public Supabase URL and anonymous key. Never add a Supabase server key, LiveKit API
-secret, or Anthropic key to this directory.
+secret, or DeepSeek key to this directory.
 
 ## Run and verify
 
@@ -29,10 +29,21 @@ npm run build
 - `/` is the volunteer client.
   While it is open and not in a call, it refreshes tab-scoped presence and receives elder help
   broadcasts with a serial 100 ms poll. Only an atomic claim response can return a LiveKit token.
+  During a call it also displays the latest speaker-labelled elder and volunteer captions. Partial
+  captions replace in place and final captions are retained; the browser cannot publish or forge
+  this elder-originated message type.
 - `/fake-elder.html` creates an elder session (or accepts a manually signed elder token), shares a
   browser screen, and displays every received DataChannel payload for integration testing.
 - `/alerts.html?session_id=SESSION_UUID` loads that session's warning/freeze history through the
   read-only demo Edge Function. The active volunteer session links to this page automatically.
+- During `npm run dev`, `/test-fixtures/privacy-fixture.html` contains invented email, banking, identity, health, contact,
+  input, face, and QR examples for two-display privacy verification. It contains no real user data.
+
+For localhost-only media testing, append `?test_synthetic_media=1` to use generated silent camera
+and microphone tracks without occupying physical devices. `?test_secondary_camera=1` selects the
+last enumerated physical camera/microphone, while `?test_audio_only=1` combines physical audio with
+a generated camera. The app ignores all three switches on non-loopback hosts; they are never a
+production media bypass.
 
 The fake-elder page is a development/demo fixture. It must not be presented as the privacy-redacted
 Mac elder client.

@@ -80,34 +80,80 @@ public struct AIGuideResponse: Codable, Equatable, Sendable {
     }
 }
 
-public struct AIRefereeRequest: Codable, Equatable, Sendable {
-    public let sessionID: UUID
-    public let transcript: String
+public struct AISafetyDialogueTurn: Codable, Equatable, Sendable {
+    public let sequence: Int
+    public let speaker: CaptionSpeaker
+    public let text: String
 
-    public init(sessionID: UUID, transcript: String) {
+    public init(sequence: Int, speaker: CaptionSpeaker, text: String) {
+        self.sequence = sequence
+        self.speaker = speaker
+        self.text = text
+    }
+}
+
+public struct AISafetyAnalysisRequest: Codable, Equatable, Sendable {
+    public let sessionID: UUID
+    public let elderGoal: String
+    public let throughSequence: Int
+    public let dialogue: [AISafetyDialogueTurn]
+    public let screenshotBase64: String?
+    public let screenRevision: Int?
+
+    public init(
+        sessionID: UUID,
+        elderGoal: String,
+        throughSequence: Int,
+        dialogue: [AISafetyDialogueTurn],
+        screenshotBase64: String?,
+        screenRevision: Int?
+    ) {
         self.sessionID = sessionID
-        self.transcript = transcript
+        self.elderGoal = elderGoal
+        self.throughSequence = throughSequence
+        self.dialogue = dialogue
+        self.screenshotBase64 = screenshotBase64
+        self.screenRevision = screenRevision
     }
 
     enum CodingKeys: String, CodingKey {
         case sessionID = "session_id"
-        case transcript
+        case elderGoal = "elder_goal"
+        case throughSequence = "through_sequence"
+        case dialogue
+        case screenshotBase64 = "screenshot_base64"
+        case screenRevision = "screen_revision"
     }
 }
 
-public enum RefereeVerdict: String, Codable, Sendable {
-    case ok
-    case warn
-    case freeze
+public enum AISafetyCategory: String, Codable, Equatable, Sendable {
+    case none
+    case sensitiveInformation = "sensitive_information"
+    case financialRequest = "financial_request"
+    case softwareInstallation = "software_installation"
+    case unknownLink = "unknown_link"
+    case pressure
+    case goalMismatch = "goal_mismatch"
+    case screenMismatch = "screen_mismatch"
+    case other
 }
 
-public struct AIRefereeResponse: Codable, Equatable, Sendable {
-    public let verdict: RefereeVerdict
+public struct AISafetyAnalysisResponse: Codable, Equatable, Sendable {
+    public let level: RiskLevel
+    public let category: AISafetyCategory
     public let reason: String
+    public let throughSequence: Int
 
-    public init(verdict: RefereeVerdict, reason: String) {
-        self.verdict = verdict
+    public init(level: RiskLevel, category: AISafetyCategory, reason: String, throughSequence: Int) {
+        self.level = level
+        self.category = category
         self.reason = reason
+        self.throughSequence = throughSequence
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case level, category, reason
+        case throughSequence = "through_sequence"
     }
 }
 

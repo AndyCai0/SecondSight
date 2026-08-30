@@ -10,7 +10,7 @@
 		<string>zh-Hans</string>
 	</array>
     <key>CFBundleDisplayName</key>
-    <string>第二双眼睛</string>
+    <string>SecondSight</string>
     <key>CFBundleExecutable</key>
     <string>SecondSightMac</string>
     <key>CFBundleIdentifier</key>

@@ -7,7 +7,7 @@ struct SecondSightApp: App {
     @StateObject private var model = AppModel()
 
     var body: some Scene {
-        WindowGroup("SecondSight · 第二双眼睛") {
+        WindowGroup("SecondSight") {
             MenuContentView(model: model)
                 .frame(minWidth: 520, minHeight: 560)
                 .onAppear {
@@ -41,7 +41,7 @@ struct MenuContentView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 HStack(spacing: 16) {
-                    Text(localized("第二双眼睛", "SecondSight", for: model.language))
+                    Text("SecondSight")
                         .font(.system(size: 32, weight: .heavy))
                     Spacer()
                     Picker(
@@ -339,7 +339,7 @@ struct PermissionChecklist: View {
                         manager.restartApplication()
                     } label: {
                         ActionButtonLabel(title: localized(
-                            "重新打开第二双眼睛",
+                            "重新打开 SecondSight",
                             "Restart SecondSight",
                             for: language
                         ))

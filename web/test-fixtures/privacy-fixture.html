@@ -11,6 +11,7 @@
       .notice { color: #506070; margin-bottom: 24px; }
       .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
       article { background: white; border: 1px solid #ccd6e0; border-radius: 14px; padding: 18px; min-height: 155px; }
+      article.wide { grid-column: 1 / -1; }
       h2 { margin-top: 0; font-size: 18px; }
       label { display: block; margin-top: 12px; font-weight: 600; }
       input { box-sizing: border-box; width: 100%; margin-top: 6px; padding: 10px; font-size: 16px; }
@@ -18,6 +19,9 @@
       .document { display: flex; align-items: center; gap: 16px; }
       .portrait { width: 86px; height: 104px; border-radius: 8px; background: linear-gradient(135deg, #f4a261, #264653); }
       .qr { width: 92px; height: 92px; background: repeating-conic-gradient(#111 0 25%, #fff 0 50%) 0/18px 18px; }
+      .suggestions { margin: 4px 0 0; padding: 8px 12px; border: 1px solid #9aa9b7; border-radius: 8px; list-style: none; }
+      .suggestions li { padding: 4px 0; }
+      canvas { display: block; max-width: 100%; border: 1px solid #8797a6; border-radius: 8px; background: white; }
     </style>
   </head>
   <body>
@@ -60,11 +64,55 @@
         <p class="ordinary">Click the blue Continue button to proceed with the tutorial.</p>
         <button type="button">Continue</button>
       </article>
+      <article>
+        <h2>Synthetic instant messages</h2>
+        <p>Fictional contact: Morgan Example</p>
+        <p>Could you bring the blue folder to our invented family meeting?</p>
+        <p>Attachment: fictional-family-note.pdf</p>
+        <button type="button">Reply</button>
+      </article>
+      <article>
+        <h2>Synthetic calendar</h2>
+        <p>Follow-up appointment with Dr Example</p>
+        <p>Attendees: Morgan Example and Jamie Example</p>
+        <p>Location: 4 Fiction Avenue, Sydney NSW 2000</p>
+        <button type="button">Open event</button>
+      </article>
+      <article>
+        <h2>Synthetic paste and autofill</h2>
+        <label>Ordinary editable field <input id="paste-target" value="Invented pasted value" /></label>
+        <label>Address search <input id="autofill-target" value="" autocomplete="street-address" /></label>
+        <ul class="suggestions" role="listbox" aria-label="Synthetic address suggestions">
+          <li role="option">8 Fiction Road, Sydney NSW 2000</li>
+          <li role="option">9 Fiction Road, Sydney NSW 2000</li>
+        </ul>
+      </article>
+      <article class="wide">
+        <h2>Canvas and PDF-style visual-only content</h2>
+        <p class="ordinary">The ordinary green sentence below must remain readable while only sensitive canvas lines are covered.</p>
+        <canvas id="visual-document" width="960" height="240" aria-label="Synthetic canvas document"></canvas>
+      </article>
     </div>
     <script>
-      if (new URLSearchParams(location.search).has("private-window")) {
-        document.title = "Synthetic Health Record - Patient Portal";
+      const search = new URLSearchParams(location.search);
+      if (search.has("private-window")) {
+        document.title = "Inbox - Gmail | Synthetic Messages and Calendar";
       }
+      if (search.has("focus-input")) {
+        document.querySelector("#autofill-target")?.focus();
+      }
+
+      const canvas = document.querySelector("#visual-document");
+      const context = canvas.getContext("2d");
+      context.fillStyle = "#ffffff";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.font = "28px -apple-system, sans-serif";
+      context.fillStyle = "#175c35";
+      context.fillText("Ordinary tutorial text: click Continue when ready.", 24, 48);
+      context.fillStyle = "#18212b";
+      context.fillText("Email: canvas.elder@example.test", 24, 100);
+      context.fillText("Account number: 5555 4444 3333 2222", 24, 148);
+      context.fillText("Phone: 0412 345 678", 24, 196);
     </script>
   </body>
 </html>

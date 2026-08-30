@@ -36,8 +36,11 @@ npm run build
   browser screen, and displays every received DataChannel payload for integration testing.
 - `/alerts.html?session_id=SESSION_UUID` loads that session's warning/freeze history through the
   read-only demo Edge Function. The active volunteer session links to this page automatically.
-- During `npm run dev`, `/test-fixtures/privacy-fixture.html` contains invented email, banking, identity, health, contact,
-  input, face, and QR examples for two-display privacy verification. It contains no real user data.
+- During `npm run dev`, `/test-fixtures/privacy-fixture.html` contains invented email, banking,
+  identity, health, contact, input, message, calendar, address-suggestion, Canvas/PDF-style, face,
+  and QR examples for two-display privacy verification. It contains no real user data. Append
+  `?focus-input=1` to expose the synthetic suggestion surface or `?private-window=1` to exercise a
+  Gmail/messages/calendar window-title context.
 
 For localhost-only media testing, append `?test_synthetic_media=1` to use generated silent camera
 and microphone tracks without occupying physical devices. `?test_secondary_camera=1` selects the
